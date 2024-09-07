@@ -1,0 +1,26 @@
+[
+  {
+    "service": "frontend",
+    "endpoint": "/reservation",
+    "method": "POST",
+    "budget": 6109
+  },
+  {
+    "service": "frontend",
+    "endpoint": "/save",
+    "method": "GET",
+    "budget": 4849
+  },
+  {
+    "service": "frontend",
+    "endpoint": "/recommendations",
+    "method": "GET",
+    "budget": 6498
+  },
+  {
+    "service": "frontend",
+    "endpoint": "/user",
+    "method": "GET",
+    "budget": 7795
+  }
+]

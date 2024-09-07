@@ -13,6 +13,8 @@ limitations under the License.
 
 package http
 
+import requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
+
 // ServerConfig holds config values for an HTTP server.
 type ServerConfig struct {
 	AppID                   string
@@ -30,4 +32,5 @@ type ServerConfig struct {
 	EnableAPILogging        bool
 	APILoggingObfuscateURLs bool
 	APILogHealthChecks      bool
+	RequestSchedulerOpts    requestScheduler.RequestSchedulerOpts
 }

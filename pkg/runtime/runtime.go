@@ -913,6 +913,7 @@ func (a *DaprRuntime) startHTTPServer() error {
 		EnableAPILogging:        *a.runtimeConfig.enableAPILogging,
 		APILoggingObfuscateURLs: a.globalConfig.GetAPILoggingSpec().ObfuscateURLs,
 		APILogHealthChecks:      !a.globalConfig.GetAPILoggingSpec().OmitHealthChecks,
+		RequestSchedulerOpts:    a.runtimeConfig.HttpRequestSchedulerOpts,
 	}
 
 	server := http.NewServer(http.NewServerOpts{
@@ -994,16 +995,17 @@ func (a *DaprRuntime) getNewServerConfig(apiListenAddresses []string, port int) 
 		trustDomain = a.accessControlList.TrustDomain
 	}
 	return grpc.ServerConfig{
-		AppID:              a.runtimeConfig.id,
-		HostAddress:        a.hostAddress,
-		Port:               port,
-		APIListenAddresses: apiListenAddresses,
-		NameSpace:          a.namespace,
-		TrustDomain:        trustDomain,
-		MaxRequestBodySize: a.runtimeConfig.maxRequestBodySize,
-		UnixDomainSocket:   a.runtimeConfig.unixDomainSocket,
-		ReadBufferSize:     a.runtimeConfig.readBufferSize,
-		EnableAPILogging:   *a.runtimeConfig.enableAPILogging,
+		AppID:                a.runtimeConfig.id,
+		HostAddress:          a.hostAddress,
+		Port:                 port,
+		APIListenAddresses:   apiListenAddresses,
+		NameSpace:            a.namespace,
+		TrustDomain:          trustDomain,
+		MaxRequestBodySize:   a.runtimeConfig.maxRequestBodySize,
+		UnixDomainSocket:     a.runtimeConfig.unixDomainSocket,
+		ReadBufferSize:       a.runtimeConfig.readBufferSize,
+		EnableAPILogging:     *a.runtimeConfig.enableAPILogging,
+		RequestSchedulerOpts: a.runtimeConfig.GrpcRequestSchedulerOpts,
 	}
 }
 

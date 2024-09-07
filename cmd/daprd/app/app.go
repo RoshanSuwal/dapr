@@ -183,11 +183,13 @@ func Run() {
 					Namespace: metrics.DefaultMetricNamespace,
 					Healthz:   healthz,
 				},
-				AppSSL:         opts.AppSSL,
-				ComponentsPath: opts.ComponentsPath,
-				Registry:       reg,
-				Security:       sec,
-				Healthz:        healthz,
+				AppSSL:                   opts.AppSSL,
+				ComponentsPath:           opts.ComponentsPath,
+				Registry:                 reg,
+				Security:                 sec,
+				Healthz:                  healthz,
+				GrpcRequestSchedulerOpts: opts.GrpcRequestSchedulerOpts,
+				HttpRequestSchedulerOpts: opts.HttpRequestSchedulerOpts,
 			})
 			if rerr != nil {
 				return rerr

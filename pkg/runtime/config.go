@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
 	"os"
 	"strconv"
 	"strings"
@@ -114,6 +115,9 @@ type Config struct {
 	Registry                      *registry.Options
 	Security                      security.Handler
 	Healthz                       healthz.Healthz
+
+	GrpcRequestSchedulerOpts requestScheduler.RequestSchedulerOpts
+	HttpRequestSchedulerOpts requestScheduler.RequestSchedulerOpts
 }
 
 type internalConfig struct {
@@ -149,6 +153,8 @@ type internalConfig struct {
 	metricsExporter              metrics.Exporter
 	healthz                      healthz.Healthz
 	outboundHealthz              healthz.Healthz
+	GrpcRequestSchedulerOpts     requestScheduler.RequestSchedulerOpts
+	HttpRequestSchedulerOpts     requestScheduler.RequestSchedulerOpts
 }
 
 func (i internalConfig) ActorsEnabled() bool {
@@ -314,6 +320,9 @@ func (c *Config) toInternal() (*internalConfig, error) {
 		internalGRPCListenAddress: c.DaprInternalGRPCListenAddress,
 		healthz:                   c.Healthz,
 		outboundHealthz:           healthz.New(),
+
+		GrpcRequestSchedulerOpts: c.GrpcRequestSchedulerOpts,
+		HttpRequestSchedulerOpts: c.HttpRequestSchedulerOpts,
 	}
 
 	if len(intc.standalone.ResourcesPath) == 0 && c.ComponentsPath != "" {

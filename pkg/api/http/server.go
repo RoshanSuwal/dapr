@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"net"
 	"net/http"
@@ -48,6 +49,8 @@ import (
 	"github.com/dapr/dapr/pkg/security"
 	"github.com/dapr/kit/logger"
 	"github.com/dapr/kit/utils"
+
+	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
 )
 
 var (
@@ -71,6 +74,7 @@ type server struct {
 	servers            []*http.Server
 	profilingListeners []net.Listener
 	wg                 sync.WaitGroup
+	scheduler          *requestScheduler.RequestScheduler
 }
 
 // NewServerOpts are the options for NewServer.
@@ -93,12 +97,14 @@ func NewServer(opts NewServerOpts) Server {
 		metricSpec:  opts.MetricSpec,
 		middleware:  opts.Middleware,
 		apiSpec:     opts.APISpec,
+		scheduler:   requestScheduler.NewRequestSchedulerFromConfig(opts.Config.RequestSchedulerOpts),
 	}
 }
 
 // StartNonBlocking starts a new server in a goroutine.
 func (s *server) StartNonBlocking() error {
 	// Create a chi router and add middlewares
+
 	r := s.getRouter()
 	s.useMaxBodySize(r)
 	s.useContextSetup(r)
@@ -108,9 +114,15 @@ func (s *server) StartNonBlocking() error {
 	s.useCors(r)
 	s.useComponents(r)
 	s.useAPILogging(r)
+	s.useRequestScheduling(r)
 
 	// Add all routes
 	s.setupRoutes(r, s.api.APIEndpoints())
+
+	// TODO: Run the request scheduler and initialize the workers
+	if s.config.RequestSchedulerOpts.EnableScheduling {
+		s.scheduler.Run()
+	}
 
 	var listeners []net.Listener
 	var profilingListeners []net.Listener
@@ -310,11 +322,61 @@ func (s *server) useContextSetup(mux chi.Router) {
 	})
 }
 
+func (s *server) useRequestScheduling(mux chi.Router) {
+	if !s.config.RequestSchedulerOpts.EnableScheduling {
+		return
+	}
+
+	log.Info("Enabled request scheduling HTTP middleware")
+	mux.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			daprRid := r.Header.Get("dapr-rid")
+			if daprRid == "" {
+				daprRid = uuid.New().String()
+				r.Header.Add("dapr-rid", daprRid)
+			}
+
+			scRequest := requestScheduler.ScRequest{
+				Endpoint:         r.URL.Path,
+				Method:           r.Method,
+				RequestTimestamp: time.Now().UnixNano() / 1e3,
+				ServiceSig:       make(chan struct{}),
+				Budget:           0,
+				RID:              daprRid,
+			}
+			s.scheduler.RegisterRequest(&scRequest)
+			// Get the request service signal and
+			// worker along with it from worker pool
+			<-scRequest.ServiceSig
+			defer close(scRequest.ServiceSig)
+
+			next.ServeHTTP(w, r)
+
+			scRequest.ServiceTime = time.Now().UnixMicro() - scRequest.RequestTimestamp - scRequest.QueuingDelay
+			// Add register worker back to pool to server next request in Request Scheduler
+			s.scheduler.RegisterWorker()
+
+			infoLog.WithFields(map[string]any{
+				"method":           scRequest.Method,
+				"endpoint":         scRequest.Endpoint,
+				"queuing_delay":    scRequest.QueuingDelay,
+				"service_time":     scRequest.ServiceTime,
+				"budget":           scRequest.Budget,
+				"remaining_budget": scRequest.RemainingBudget,
+				"RID":              scRequest.RID,
+				"response_time":    scRequest.ServiceTime + scRequest.QueuingDelay,
+			}).Info("[HTTP Request Scheduler]")
+		})
+	})
+
+}
+
 func (s *server) useAPILogging(mux chi.Router) {
 	if !s.config.EnableAPILogging {
 		return
 	}
 
+	log.Info("Enabled API Logging HTTP middleware")
 	mux.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Wrap the writer in a ResponseWriter so we can collect stats such as status code and size

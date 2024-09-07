@@ -15,6 +15,7 @@ package options
 
 import (
 	"fmt"
+	"github.com/dapr/dapr/pkg/api/scheduler"
 	"math"
 	"os"
 	"strconv"
@@ -82,6 +83,50 @@ type Options struct {
 	AppChannelAddress             string
 	Logger                        logger.Options
 	Metrics                       *metrics.FlagOptions
+
+	HttpRequestSchedulerOpts scheduler.RequestSchedulerOpts
+	GrpcRequestSchedulerOpts scheduler.RequestSchedulerOpts
+}
+
+func LoadOptForRequestScheduler(fs *pflag.FlagSet, opts *Options) {
+	opts.HttpRequestSchedulerOpts = scheduler.RequestSchedulerOpts{}
+
+	fs.IntVar(&opts.HttpRequestSchedulerOpts.MaxWorker, "http_scheduler_max_workers", 100, "Max Workers used for HTTP Request Scheduler")
+	fs.IntVar(&opts.HttpRequestSchedulerOpts.RequestChanCapacity, "http_scheduler_rs_chan_capacity", 100, "Request Channel Capacity used for HTTP Request Scheduler")
+	fs.IntVar(&opts.HttpRequestSchedulerOpts.Worker, "http_scheduler_worker", 1, "Workers to serve HTTP request for HTTP Request Scheduler")
+	fs.StringVar(&opts.HttpRequestSchedulerOpts.RequestSchedulingPolicy, "http_scheduler_policy", "fifo", "Scheduling Policy for HTTP Request Scheduler")
+
+	fs.StringVar(&opts.HttpRequestSchedulerOpts.BudgetConfigPath, "http_scheduler_budget_path", "", "Budget Config Path for HTTP Request Scheduler")
+	fs.IntVar(&opts.HttpRequestSchedulerOpts.DefaultBudget, "http_scheduler_default_budget", 0, "Default Budget for HTTP Request Scheduler")
+
+	fs.StringVar(&opts.HttpRequestSchedulerOpts.RedisHost, "http_scheduler_redis_host", "localhost:6379", "Redis Host for HTTP Request Scheduler")
+	fs.StringVar(&opts.HttpRequestSchedulerOpts.RedisDatabase, "http_scheduler_redis_database", "0", "Redis database for HTTP Request Scheduler")
+	fs.StringVar(&opts.HttpRequestSchedulerOpts.RedisPassword, "http_scheduler_redis_password", "", "Redis Password for HTTP Request Scheduler")
+	fs.BoolVar(&opts.HttpRequestSchedulerOpts.EnableScheduling, "http_scheduler_enable_scheduling", false, "Enable Http Request Scheduler")
+	fs.StringVar(&opts.HttpRequestSchedulerOpts.LoggerName, "http_scheduler_logger_name", "http scheduler", "Logger for Http Request Scheduler")
+
+	fs.BoolVar(&opts.HttpRequestSchedulerOpts.EnableLogging, "http_scheduler_enable_logging", false, "Enable Grpc Scheduler Metrics Logging")
+	fs.IntVar(&opts.HttpRequestSchedulerOpts.LoggingInterval, "http_scheduler_logging_interval", 10, "Logging interval for grpc Request Scheduler")
+
+	opts.GrpcRequestSchedulerOpts = scheduler.RequestSchedulerOpts{}
+
+	fs.IntVar(&opts.GrpcRequestSchedulerOpts.MaxWorker, "grpc_scheduler_max_workers", 100, "Max Workers used for HTTP Request Scheduler")
+	fs.IntVar(&opts.GrpcRequestSchedulerOpts.RequestChanCapacity, "grpc_scheduler_rs_chan_capacity", 100, "Request Channel Capacity used for grpc Request Scheduler")
+	fs.IntVar(&opts.GrpcRequestSchedulerOpts.Worker, "grpc_scheduler_worker", 1, "Workers to serve grpc request for grpc Request Scheduler")
+	fs.StringVar(&opts.GrpcRequestSchedulerOpts.RequestSchedulingPolicy, "grpc_scheduler_policy", "fifo", "Scheduling Policy for grpc Request Scheduler")
+
+	fs.StringVar(&opts.GrpcRequestSchedulerOpts.BudgetConfigPath, "grpc_scheduler_budget_path", "", "Budget Config Path for grpc Request Scheduler")
+	fs.IntVar(&opts.GrpcRequestSchedulerOpts.DefaultBudget, "grpc_scheduler_default_budget", 0, "Default Budget for grpc Request Scheduler")
+
+	fs.StringVar(&opts.GrpcRequestSchedulerOpts.RedisHost, "grpc_scheduler_redis_host", "localhost:6379", "Redis Host for grpc Request Scheduler")
+	fs.StringVar(&opts.GrpcRequestSchedulerOpts.RedisDatabase, "grpc_scheduler_redis_database", "0", "Redis database for grpc Request Scheduler")
+	fs.StringVar(&opts.GrpcRequestSchedulerOpts.RedisPassword, "grpc_scheduler_redis_password", "", "Redis Password for grpc Request Scheduler")
+
+	fs.BoolVar(&opts.GrpcRequestSchedulerOpts.EnableScheduling, "grpc_scheduler_enable_scheduling", false, "Enable grpc Request Scheduler")
+	fs.StringVar(&opts.GrpcRequestSchedulerOpts.LoggerName, "grpc_scheduler_logger_name", "grpc scheduler", "Logger for grpc Request Scheduler")
+	fs.BoolVar(&opts.GrpcRequestSchedulerOpts.EnableLogging, "grpc_scheduler_enable_logging", false, "Enable Grpc Scheduler Metrics Logging")
+	fs.IntVar(&opts.GrpcRequestSchedulerOpts.LoggingInterval, "grpc_scheduler_logging_interval", 10, "Logging interval for grpc Request Scheduler")
+
 }
 
 func New(origArgs []string) (*Options, error) {
@@ -178,6 +223,9 @@ func New(origArgs []string) (*Options, error) {
 
 	opts.Metrics = metrics.DefaultFlagOptions()
 	opts.Metrics.AttachCmdFlags(fs.StringVar, fs.BoolVar)
+
+	// Add flags for Http And Grpc Request Scheduling
+	LoadOptForRequestScheduler(fs, &opts)
 
 	// Ignore errors; flagset is set for ExitOnError
 	_ = fs.Parse(args)

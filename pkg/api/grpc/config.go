@@ -13,16 +13,19 @@ limitations under the License.
 
 package grpc
 
+import "github.com/dapr/dapr/pkg/api/scheduler"
+
 // ServerConfig is the config object for a grpc server.
 type ServerConfig struct {
-	AppID              string
-	HostAddress        string
-	Port               int
-	APIListenAddresses []string
-	NameSpace          string
-	TrustDomain        string
-	MaxRequestBodySize int // In bytes
-	ReadBufferSize     int // In bytes
-	UnixDomainSocket   string
-	EnableAPILogging   bool
+	AppID                string
+	HostAddress          string
+	Port                 int
+	APIListenAddresses   []string
+	NameSpace            string
+	TrustDomain          string
+	MaxRequestBodySize   int // In bytes
+	ReadBufferSize       int // In bytes
+	UnixDomainSocket     string
+	EnableAPILogging     bool
+	RequestSchedulerOpts scheduler.RequestSchedulerOpts
 }

@@ -17,9 +17,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"math"
 	"net"
+	"reflect"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -45,6 +47,8 @@ import (
 	"github.com/dapr/dapr/pkg/security"
 	securityConsts "github.com/dapr/dapr/pkg/security/consts"
 	"github.com/dapr/kit/logger"
+
+	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
 )
 
 const (
@@ -72,13 +76,14 @@ type Options struct {
 }
 
 type OptionsInternal struct {
-	API         API
-	Config      ServerConfig
-	TracingSpec config.TracingSpec
-	MetricSpec  config.MetricSpec
-	Security    security.Handler
-	Proxy       messaging.Proxy
-	Healthz     healthz.Healthz
+	API                      API
+	Config                   ServerConfig
+	TracingSpec              config.TracingSpec
+	MetricSpec               config.MetricSpec
+	Security                 security.Handler
+	Proxy                    messaging.Proxy
+	Healthz                  healthz.Healthz
+	GrpcRequestSchedulerOpts requestScheduler.RequestSchedulerOpts
 }
 
 type server struct {
@@ -100,6 +105,8 @@ type server struct {
 	htarget        healthz.Target
 	closed         atomic.Bool
 	closeCh        chan struct{}
+
+	scheduler *requestScheduler.RequestScheduler
 }
 
 var (
@@ -125,6 +132,7 @@ func NewAPIServer(opts Options) Server {
 		workflowEngine: opts.WorkflowEngine,
 		htarget:        opts.Healthz.AddTarget(),
 		closeCh:        make(chan struct{}),
+		scheduler:      requestScheduler.NewRequestSchedulerFromConfig(opts.Config.RequestSchedulerOpts),
 	}
 }
 
@@ -167,6 +175,7 @@ func NewInternalServer(opts OptionsInternal) Server {
 		sec:            opts.Security,
 		htarget:        opts.Healthz.AddTarget(),
 		closeCh:        make(chan struct{}),
+		//scheduler:      requestScheduler.NewRequestSchedulerFromConfig(opts.Config.RequestSchedulerOpts),
 	}
 }
 
@@ -225,6 +234,10 @@ func (s *server) StartNonBlocking() error {
 				s.logger.Fatalf("gRPC serve error: %v", err)
 			}
 		}(server, listener)
+	}
+
+	if s.config.RequestSchedulerOpts.EnableScheduling && s.kind == apiServer {
+		s.scheduler.Run()
 	}
 
 	s.htarget.Ready()
@@ -308,6 +321,13 @@ func (s *server) getMiddlewareOptions() []grpcGo.ServerOption {
 		intrStream = append(intrStream, stream)
 	}
 
+	// TODO : finding appropriate place to run request scheduler
+	if s.config.RequestSchedulerOpts.EnableScheduling {
+		urs, srs := s.withRequestScheduling()
+		intr = append(intr, urs)
+		intrStream = append(intrStream, srs)
+	}
+
 	return []grpcGo.ServerOption{
 		grpcGo.UnaryInterceptor(grpcMiddleware.ChainUnaryServer(intr...)),
 		grpcGo.StreamInterceptor(grpcMiddleware.ChainStreamServer(intrStream...)),
@@ -344,6 +364,7 @@ func (s *server) getGRPCAPILoggingMiddlewares() (grpcGo.UnaryServerInterceptor, 
 	if s.infoLogger == nil {
 		return nil, nil
 	}
+	s.logger.Info("Enabled GRPCAPILogging Middleware")
 
 	return func(ctx context.Context, req any, info *grpcGo.UnaryServerInfo, handler grpcGo.UnaryHandler) (any, error) {
 			// Invoke the handler
@@ -362,12 +383,89 @@ func (s *server) getGRPCAPILoggingMiddlewares() (grpcGo.UnaryServerInterceptor, 
 			// Invoke the handler
 			start := time.Now()
 			err := handler(srv, stream)
-
 			// Print the API logs
 			if info != nil {
 				s.printAPILog(stream.Context(), info.FullMethod, time.Since(start), grpcStatus.Code(err))
 			}
+			// Return the response
+			return err
+		}
+}
 
+func (s *server) withRequestScheduling() (grpcGo.UnaryServerInterceptor, grpcGo.StreamServerInterceptor) {
+	s.logger.Info("Enabled grpc Request Scheduling Middleware")
+	return func(ctx context.Context, req any, info *grpcGo.UnaryServerInfo, handler grpcGo.UnaryHandler) (any, error) {
+			// Invoke the handler
+			// TODO:
+			// 1. Compare the type of request
+			// 2. If request app_id = dapr.app_id then send to request scheduler for scheduling
+			// 3. Else just continue
+			//
+			switch reflect.TypeOf(req) {
+			case reflect.TypeOf(&runtimev1pb.InvokeServiceRequest{}):
+				invokeServiceRequest := req.(*runtimev1pb.InvokeServiceRequest)
+				if invokeServiceRequest.Id != s.config.AppID {
+					return handler(ctx, req)
+				} else {
+
+					md, ok := metadata.FromIncomingContext(ctx)
+					if !ok {
+						s.logger.Error(fmt.Errorf("failed to get metadata from context"))
+					}
+
+					scRequest := &requestScheduler.ScRequest{
+						Endpoint:         invokeServiceRequest.Message.Method,
+						Method:           "RPC",
+						RequestTimestamp: time.Now().UnixNano() / 1e3,
+						ServiceSig:       make(chan struct{}),
+						Budget:           0,
+						//RID:              md.Get("dapr-rid")[0],
+					}
+
+					if rids := md.Get("dapr-rid"); len(rids) > 0 {
+						scRequest.RID = rids[0]
+					} else {
+						scRequest.RID = uuid.New().String()
+					}
+
+					s.scheduler.RegisterRequest(scRequest)
+					// Get the request service signal and
+					// worker along with it from worker pool
+					<-scRequest.ServiceSig
+					defer close(scRequest.ServiceSig)
+
+					res, err := handler(ctx, req)
+
+					scRequest.ServiceTime = time.Now().UnixMicro() - scRequest.RequestTimestamp - scRequest.QueuingDelay
+					// Add register worker back to pool to server next request in Request Scheduler
+					s.scheduler.RegisterWorker()
+
+					s.infoLogger.WithFields(map[string]any{
+						"method":           scRequest.Method,
+						"endpoint":         scRequest.Endpoint,
+						"queuing_delay":    scRequest.QueuingDelay,
+						"service_time":     scRequest.ServiceTime,
+						"budget":           scRequest.Budget,
+						"remaining_budget": scRequest.RemainingBudget,
+						"RID":              scRequest.RID,
+						"response_time":    scRequest.ServiceTime + scRequest.QueuingDelay,
+					}).Info("[GRPC Request Scheduler]")
+
+					// Return the response
+					return res, err
+				}
+			default:
+				return handler(ctx, req)
+			}
+		},
+		func(srv any, stream grpcGo.ServerStream, info *grpcGo.StreamServerInfo, handler grpcGo.StreamHandler) error {
+			// Invoke the handler
+			start := time.Now()
+			err := handler(srv, stream)
+			// Print the API logs
+			if info != nil {
+				s.printAPILog(stream.Context(), info.FullMethod, time.Since(start), grpcStatus.Code(err))
+			}
 			// Return the response
 			return err
 		}
