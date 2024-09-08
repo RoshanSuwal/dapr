@@ -114,6 +114,41 @@ type SidecarConfig struct {
 	InjectPluggableComponents           bool    `annotation:"dapr.io/inject-pluggable-components"`
 	AppChannelAddress                   string  `annotation:"dapr.io/app-channel-address"`
 
+	// annotations for request scheduler
+	// for Http Request Scheduler
+	HttpRequestSchedulerOptsMaxWorker               *int   `annotation:"dapr.io/http_scheduler_max_workers"`
+	HttpRequestSchedulerOptsRequestChanCapacity     *int   `annotation:"dapr.io/http_scheduler_rs_chan_capacity"`
+	HttpRequestSchedulerOptsWorker                  *int   `annotation:"dapr.io/http_scheduler_worker"`
+	HttpRequestSchedulerOptsRequestSchedulingPolicy string `annotation:"dapr.io/http_scheduler_policy"`
+	HttpRequestSchedulerOptsRedisHost               string `annotation:"dapr.io/http_scheduler_redis_host"`
+	HttpRequestSchedulerOptsRedisDatabase           string `annotation:"dapr.io/http_scheduler_redis_database"`
+	HttpRequestSchedulerOptsRedisPassword           string `annotation:"dapr.io/http_scheduler_redis_password"`
+	HttpRequestSchedulerOptsBudgetConfigPath        string `annotation:"dapr.io/http_scheduler_budget_path"`
+	HttpRequestSchedulerOptsDefaultBudget           *int   `annotation:"dapr.io/http_scheduler_default_budget"`
+	HttpRequestSchedulerOptsEnableScheduling        bool   `annotation:"dapr.io/http_scheduler_enable_scheduling"`
+	HttpRequestSchedulerOptsLoggerName              string `annotation:"dapr.io/http_scheduler_logger_name"`
+	HttpRequestSchedulerOptsEnableLogging           bool   `annotation:"dapr.io/http_scheduler_enable_logging"`
+	HttpRequestSchedulerOptsLoggingInterval         *int   `annotation:"dapr.io/http_scheduler_logging_interval"`
+
+	HttpRequestSchedulerOptsConfig string `annotation:"dapr.io/http_scheduler_config"`
+
+	// for Grpc Request Scheduler
+	GrpcRequestSchedulerOptsMaxWorker               *int   `annotation:"dapr.io/grpc_scheduler_max_workers"`
+	GrpcRequestSchedulerOptsRequestChanCapacity     *int   `annotation:"dapr.io/grpc_scheduler_rs_chan_capacity"`
+	GrpcRequestSchedulerOptsWorker                  *int   `annotation:"dapr.io/grpc_scheduler_worker"`
+	GrpcRequestSchedulerOptsRequestSchedulingPolicy string `annotation:"dapr.io/grpc_scheduler_policy"`
+	GrpcRequestSchedulerOptsRedisHost               string `annotation:"dapr.io/grpc_scheduler_redis_host"`
+	GrpcRequestSchedulerOptsRedisDatabase           string `annotation:"dapr.io/grpc_scheduler_redis_database"`
+	GrpcRequestSchedulerOptsRedisPassword           string `annotation:"dapr.io/grpc_scheduler_redis_password"`
+	GrpcRequestSchedulerOptsBudgetConfigPath        string `annotation:"dapr.io/grpc_scheduler_budget_path"`
+	GrpcRequestSchedulerOptsDefaultBudget           *int   `annotation:"dapr.io/grpc_scheduler_default_budget"`
+	GrpcRequestSchedulerOptsEnableScheduling        bool   `annotation:"dapr.io/grpc_scheduler_enable_scheduling"`
+	GrpcRequestSchedulerOptsLoggerName              string `annotation:"dapr.io/grpc_scheduler_logger_name"`
+	GrpcRequestSchedulerOptsEnableLogging           bool   `annotation:"dapr.io/grpc_scheduler_enable_logging"`
+	GrpcRequestSchedulerOptsLoggingInterval         *int   `annotation:"dapr.io/grpc_scheduler_logging_interval"`
+
+	GrpcRequestSchedulerOptsConfig string `annotation:"dapr.io/grpc_scheduler_config"`
+
 	pod *corev1.Pod
 }
 

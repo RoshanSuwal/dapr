@@ -187,6 +187,121 @@ func (c *SidecarConfig) getSidecarContainer(opts getSidecarContainerOpts) (*core
 		args = append(args, "--dapr-block-shutdown-duration", *c.BlockShutdownDuration)
 	}
 
+	// Arguments for Request Scheduler
+	{
+		if c.HttpRequestSchedulerOptsMaxWorker != nil {
+			args = append(args, "--http_scheduler_max_workers", strconv.Itoa(*c.HttpRequestSchedulerOptsMaxWorker))
+		}
+
+		if c.HttpRequestSchedulerOptsRequestChanCapacity != nil {
+			args = append(args, "--http_scheduler_rs_chan_capacity", strconv.Itoa(*c.HttpRequestSchedulerOptsRequestChanCapacity))
+		}
+		if c.HttpRequestSchedulerOptsWorker != nil {
+			args = append(args, "--http_scheduler_worker", strconv.Itoa(*c.HttpRequestSchedulerOptsWorker))
+		}
+
+		if c.HttpRequestSchedulerOptsDefaultBudget != nil {
+			args = append(args, "--http_scheduler_default_budget", strconv.Itoa(*c.HttpRequestSchedulerOptsDefaultBudget))
+		}
+
+		if c.HttpRequestSchedulerOptsLoggingInterval != nil {
+			args = append(args, "--http_scheduler_worker", strconv.Itoa(*c.HttpRequestSchedulerOptsLoggingInterval))
+		}
+
+		if c.HttpRequestSchedulerOptsRequestSchedulingPolicy != "" {
+			args = append(args, "--http_scheduler_policy", c.HttpRequestSchedulerOptsRequestSchedulingPolicy)
+		}
+
+		if c.HttpRequestSchedulerOptsRedisHost != "" {
+			args = append(args, "--http_scheduler_redis_host", c.HttpRequestSchedulerOptsRedisHost)
+		}
+
+		if c.HttpRequestSchedulerOptsRedisDatabase != "" {
+			args = append(args, "--http_scheduler_redis_database", c.HttpRequestSchedulerOptsRedisDatabase)
+		}
+
+		if c.HttpRequestSchedulerOptsRedisPassword != "" {
+			args = append(args, "--http_scheduler_redis_password", c.HttpRequestSchedulerOptsRedisPassword)
+		}
+
+		if c.HttpRequestSchedulerOptsBudgetConfigPath != "" {
+			args = append(args, "--http_scheduler_budget_path", c.HttpRequestSchedulerOptsBudgetConfigPath)
+		}
+
+		if c.HttpRequestSchedulerOptsLoggerName != "" {
+			args = append(args, "--http_scheduler_logger_name", c.HttpRequestSchedulerOptsLoggerName)
+		}
+
+		if c.HttpRequestSchedulerOptsEnableScheduling {
+			args = append(args, "--http_scheduler_enable_scheduling")
+		}
+
+		if c.HttpRequestSchedulerOptsEnableLogging {
+			args = append(args, "--http_scheduler_enable_logging")
+		}
+	}
+
+	// Arguments for Grpc Request Scheduler
+	{
+		if c.GrpcRequestSchedulerOptsMaxWorker != nil {
+			args = append(args, "--grpc_scheduler_max_workers", strconv.Itoa(*c.GrpcRequestSchedulerOptsMaxWorker))
+		}
+
+		if c.GrpcRequestSchedulerOptsRequestChanCapacity != nil {
+			args = append(args, "--grpc_scheduler_rs_chan_capacity", strconv.Itoa(*c.GrpcRequestSchedulerOptsRequestChanCapacity))
+		}
+		if c.GrpcRequestSchedulerOptsWorker != nil {
+			args = append(args, "--grpc_scheduler_worker", strconv.Itoa(*c.GrpcRequestSchedulerOptsWorker))
+		}
+
+		if c.GrpcRequestSchedulerOptsDefaultBudget != nil {
+			args = append(args, "--grpc_scheduler_default_budget", strconv.Itoa(*c.GrpcRequestSchedulerOptsDefaultBudget))
+		}
+
+		if c.GrpcRequestSchedulerOptsLoggingInterval != nil {
+			args = append(args, "--grpc_scheduler_worker", strconv.Itoa(*c.GrpcRequestSchedulerOptsLoggingInterval))
+		}
+
+		if c.GrpcRequestSchedulerOptsRequestSchedulingPolicy != "" {
+			args = append(args, "--grpc_scheduler_policy", c.GrpcRequestSchedulerOptsRequestSchedulingPolicy)
+		}
+
+		if c.GrpcRequestSchedulerOptsRedisHost != "" {
+			args = append(args, "--grpc_scheduler_redis_host", c.GrpcRequestSchedulerOptsRedisHost)
+		}
+
+		if c.GrpcRequestSchedulerOptsRedisDatabase != "" {
+			args = append(args, "--grpc_scheduler_redis_database", c.GrpcRequestSchedulerOptsRedisDatabase)
+		}
+
+		if c.GrpcRequestSchedulerOptsRedisPassword != "" {
+			args = append(args, "--grpc_scheduler_redis_password", c.GrpcRequestSchedulerOptsRedisPassword)
+		}
+
+		if c.GrpcRequestSchedulerOptsBudgetConfigPath != "" {
+			args = append(args, "--grpc_scheduler_budget_path", c.GrpcRequestSchedulerOptsBudgetConfigPath)
+		}
+
+		if c.GrpcRequestSchedulerOptsLoggerName != "" {
+			args = append(args, "--grpc_scheduler_logger_name", c.GrpcRequestSchedulerOptsLoggerName)
+		}
+
+		if c.GrpcRequestSchedulerOptsEnableScheduling {
+			args = append(args, "--grpc_scheduler_enable_scheduling")
+		}
+
+		if c.GrpcRequestSchedulerOptsEnableLogging {
+			args = append(args, "--grpc_scheduler_enable_logging")
+		}
+	}
+
+	if c.HttpRequestSchedulerOptsConfig != "" {
+		args = append(args, c.HttpRequestSchedulerOptsConfig)
+	}
+	if c.GrpcRequestSchedulerOptsConfig != "" {
+		args = append(args, c.GrpcRequestSchedulerOptsConfig)
+	}
+
 	// When debugging is enabled, we need to override the command and the flags
 	if c.EnableDebug {
 		ports = append(ports, corev1.ContainerPort{

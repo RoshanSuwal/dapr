@@ -15,8 +15,11 @@ RUN go mod vendor
 
 ENV GO111MODULE=on
 
+#RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+#    go build -tags=stablecomponents,unit -a -tags netgo -mod vendor -o ./daprd -x cmd/daprd/main.go
+
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -tags=stablecomponents,unit -a -tags netgo -mod vendor -o ./daprd -x cmd/daprd/main.go
+    go build -a -tags stablecomponents,netgo,unit -mod vendor -o ./daprd -x cmd/daprd/main.go
 
 
 FROM gcr.io/distroless/static:nonroot
