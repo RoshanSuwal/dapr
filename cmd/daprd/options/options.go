@@ -130,6 +130,7 @@ func LoadOptForRequestScheduler(fs *pflag.FlagSet, opts *Options) {
 }
 
 func New(origArgs []string) (*Options, error) {
+	fmt.Printf("%s\n", origArgs)
 	opts := Options{
 		EnableAPILogging:          new(bool),
 		DaprBlockShutdownDuration: new(time.Duration),

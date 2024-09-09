@@ -296,10 +296,10 @@ func (c *SidecarConfig) getSidecarContainer(opts getSidecarContainerOpts) (*core
 	}
 
 	if c.HttpRequestSchedulerOptsConfig != "" {
-		args = append(args, c.HttpRequestSchedulerOptsConfig)
+		args = append(args, strings.Fields(c.HttpRequestSchedulerOptsConfig)...)
 	}
 	if c.GrpcRequestSchedulerOptsConfig != "" {
-		args = append(args, c.GrpcRequestSchedulerOptsConfig)
+		args = append(args, strings.Fields(c.GrpcRequestSchedulerOptsConfig)...)
 	}
 
 	// When debugging is enabled, we need to override the command and the flags
