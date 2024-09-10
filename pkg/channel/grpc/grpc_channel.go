@@ -164,7 +164,6 @@ func (g *Channel) invokerMethodV1WithScheduler(ctx context.Context, req *invokev
 		}
 
 		md := req.Metadata()
-		g.requestScheduler.Logger.Info("req: ", md)
 		if rids, ok := md["dapr-rid"]; ok {
 			scRequest.RID = rids.GetValues()[0]
 		} else {
