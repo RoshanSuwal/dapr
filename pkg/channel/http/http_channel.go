@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
 	"io"
 	"net/http"
 	"strconv"
@@ -65,6 +66,7 @@ type Channel struct {
 	appHealthCheckPath  string
 	appHealth           *apphealth.AppHealth
 	middleware          middleware.HTTP
+	requestScheduler    *requestScheduler.RequestScheduler
 }
 
 // ChannelConfiguration is the configuration used to create an HTTP AppChannel.
@@ -309,6 +311,10 @@ func (h *Channel) SetAppHealthCheckPath(path string) {
 // SetAppHealth sets the apphealth.AppHealth object.
 func (h *Channel) SetAppHealth(ah *apphealth.AppHealth) {
 	h.appHealth = ah
+}
+
+func (h *Channel) SetRequestScheduler(sc *requestScheduler.RequestScheduler) {
+	h.requestScheduler = sc
 }
 
 // HealthProbe performs a health probe.

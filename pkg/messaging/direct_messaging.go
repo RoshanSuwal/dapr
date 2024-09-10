@@ -170,8 +170,8 @@ func (d *directMessaging) Invoke(ctx context.Context, targetAppID string, req *i
 
 	// TODO : implement scheduling logic
 	if app.id == d.appID && app.namespace == d.namespace {
-		//return d.invokeLocal(ctx, req)
-		return d.invokeWithScheduler(ctx, targetAppID, req)
+		return d.invokeLocal(ctx, req)
+		//return d.invokeWithScheduler(ctx, targetAppID, req)
 	}
 
 	return d.invokeWithRetry(ctx, retry.DefaultLinearRetryCount, retry.DefaultLinearBackoffInterval, app, d.invokeRemote, req)

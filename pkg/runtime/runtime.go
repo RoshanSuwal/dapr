@@ -635,6 +635,7 @@ func (a *DaprRuntime) initRuntime(ctx context.Context) error {
 
 	// starting request scheduler
 	log.Info("Starting the request scheduler!!!")
+	a.channels.AppChannel().SetRequestScheduler(a.requestScheduler)
 	a.requestScheduler.Run()
 
 	a.runtimeConfig.outboundHealthz.AddTarget().Ready()

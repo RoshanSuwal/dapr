@@ -16,7 +16,7 @@ package channel
 import (
 	"context"
 	"crypto/tls"
-
+	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
 	"github.com/dapr/dapr/pkg/apphealth"
 	"github.com/dapr/dapr/pkg/config"
 	invokev1 "github.com/dapr/dapr/pkg/messaging/v1"
@@ -34,6 +34,7 @@ type AppChannel interface {
 	HealthProbe(ctx context.Context) (bool, error)
 	SetAppHealth(ah *apphealth.AppHealth)
 	TriggerJob(ctx context.Context, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)
+	SetRequestScheduler(sc *requestScheduler.RequestScheduler)
 }
 
 // HTTPEndpointAppChannel is an abstraction over communications with http endpoint resources.

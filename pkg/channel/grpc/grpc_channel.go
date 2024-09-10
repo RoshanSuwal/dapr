@@ -16,9 +16,12 @@ package grpc
 import (
 	"context"
 	"fmt"
+	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
+	"github.com/google/uuid"
 	"net"
 	"strconv"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -47,6 +50,7 @@ type Channel struct {
 	appMetadataToken       string
 	maxRequestBodySize     int
 	appHealth              *apphealth.AppHealth
+	requestScheduler       *requestScheduler.RequestScheduler
 }
 
 // CreateLocalChannel creates a gRPC connection with user code.
@@ -80,8 +84,8 @@ func (g *Channel) InvokeMethod(ctx context.Context, req *invokev1.InvokeMethodRe
 
 	switch req.APIVersion() {
 	case internalv1pb.APIVersion_V1: //nolint:nosnakecase
-		return g.invokeMethodV1(ctx, req)
-
+		//return g.invokeMethodV1(ctx, req)
+		return g.invokerMethodV1WithScheduler(ctx, req)
 	default:
 		// Reject unsupported version
 		return nil, status.Error(codes.Unimplemented, fmt.Sprintf("Unsupported spec version: %d", req.APIVersion()))
@@ -145,6 +149,56 @@ func (g *Channel) sendJob(ctx context.Context, req *invokev1.InvokeMethodRequest
 		WithTrailers(trailer)
 
 	return rsp, nil
+}
+
+func (g *Channel) invokerMethodV1WithScheduler(ctx context.Context, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error) {
+	if g.requestScheduler.EnableScheduling {
+
+		scRequest := &requestScheduler.ScRequest{
+			Endpoint:         req.Message().Method,
+			Method:           "RPC",
+			RequestTimestamp: time.Now().UnixNano() / 1e3,
+			ServiceSig:       make(chan struct{}),
+			Budget:           0,
+			//RID:              md.Get("dapr-rid")[0],s
+		}
+
+		md := req.Metadata()
+		g.requestScheduler.Logger.Info("req: ", md)
+		if rids, ok := md["dapr-rid"]; ok {
+			scRequest.RID = rids.GetValues()[0]
+		} else {
+			scRequest.RID = uuid.New().String()
+			m := make(map[string][]string)
+			m["dapr-rid"] = []string{scRequest.RID}
+			req.AddMetadata(m)
+		}
+
+		g.requestScheduler.RegisterRequest(scRequest)
+		<-scRequest.ServiceSig
+		defer close(scRequest.ServiceSig)
+
+		response, err := g.invokeMethodV1(ctx, req)
+		scRequest.ServiceTime = time.Now().UnixMicro() - scRequest.RequestTimestamp - scRequest.QueuingDelay
+		// Add register worker back to pool to server next request in Request Scheduler
+		g.requestScheduler.RegisterWorker()
+
+		g.requestScheduler.Logger.WithFields(map[string]any{
+			"method":           scRequest.Method,
+			"endpoint":         scRequest.Endpoint,
+			"queuing_delay":    scRequest.QueuingDelay,
+			"service_time":     scRequest.ServiceTime,
+			"budget":           scRequest.Budget,
+			"remaining_budget": scRequest.RemainingBudget,
+			"RID":              scRequest.RID,
+			"response_time":    scRequest.ServiceTime + scRequest.QueuingDelay,
+			"service":          scRequest.Service,
+		}).Info("request.scheduler")
+
+		return response, err
+	} else {
+		return g.invokeMethodV1(ctx, req)
+	}
 }
 
 // invokeMethodV1 calls user applications using daprclient v1.
@@ -232,4 +286,8 @@ func (g *Channel) HealthProbe(ctx context.Context) (bool, error) {
 // SetAppHealth sets the apphealth.AppHealth object.
 func (g *Channel) SetAppHealth(ah *apphealth.AppHealth) {
 	g.appHealth = ah
+}
+
+func (g *Channel) SetRequestScheduler(sc *requestScheduler.RequestScheduler) {
+	g.requestScheduler = sc
 }
