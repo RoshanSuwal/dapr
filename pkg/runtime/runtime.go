@@ -18,6 +18,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
 	"io"
 	"net"
 	"os"
@@ -142,6 +143,8 @@ type DaprRuntime struct {
 	workflowEngine *wfengine.WorkflowEngine
 
 	wg sync.WaitGroup
+
+	requestScheduler *requestScheduler.RequestScheduler
 }
 
 // newDaprRuntime returns a new runtime with the given runtime config and global config.
@@ -524,6 +527,9 @@ func (a *DaprRuntime) initRuntime(ctx context.Context) error {
 	// Start proxy
 	a.initProxy()
 
+	// initializing the request Scheduler
+	a.initRequestScheduler()
+
 	a.initDirectMessaging(a.nameResolver)
 
 	a.initPluggableComponents(ctx)
@@ -626,6 +632,10 @@ func (a *DaprRuntime) initRuntime(ctx context.Context) error {
 	log.Infof("Internal gRPC server is running on %s:%d", a.runtimeConfig.internalGRPCListenAddress, a.runtimeConfig.internalGRPCPort)
 
 	a.initDirectMessaging(a.nameResolver)
+
+	// starting request scheduler
+	log.Info("Starting the request scheduler!!!")
+	a.requestScheduler.Run()
 
 	a.runtimeConfig.outboundHealthz.AddTarget().Ready()
 	if err := a.blockUntilAppIsReady(ctx); err != nil {
@@ -852,7 +862,16 @@ func (a *DaprRuntime) populateSecretsConfiguration() {
 	}
 }
 
+// TODO init request scheduler
+func (a *DaprRuntime) initRequestScheduler() {
+	log.Info("Initializing Request scheduler")
+	a.requestScheduler = requestScheduler.NewRequestSchedulerFromConfig(a.runtimeConfig.GrpcRequestSchedulerOpts)
+}
+
+// TODO add the logic of Scheduler in Direct Messaging
 func (a *DaprRuntime) initDirectMessaging(resolver nr.Resolver) {
+	log.Info("Initializing Direct Messaging for Dapr Runtime")
+
 	a.directMessaging = messaging.NewDirectMessaging(messaging.NewDirectMessagingOpts{
 		AppID:              a.runtimeConfig.id,
 		Namespace:          a.namespace,
@@ -866,6 +885,7 @@ func (a *DaprRuntime) initDirectMessaging(resolver nr.Resolver) {
 		ReadBufferSize:     a.runtimeConfig.readBufferSize,
 		Resiliency:         a.resiliency,
 		CompStore:          a.compStore,
+		RequestScheduler:   a.requestScheduler,
 	})
 	a.runnerCloser.AddCloser(a.directMessaging)
 }

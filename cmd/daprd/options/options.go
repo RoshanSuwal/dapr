@@ -123,7 +123,7 @@ func LoadOptForRequestScheduler(fs *pflag.FlagSet, opts *Options) {
 	fs.StringVar(&opts.GrpcRequestSchedulerOpts.RedisPassword, "grpc_scheduler_redis_password", "", "Redis Password for grpc Request Scheduler")
 
 	fs.BoolVar(&opts.GrpcRequestSchedulerOpts.EnableScheduling, "grpc_scheduler_enable_scheduling", false, "Enable grpc Request Scheduler")
-	fs.StringVar(&opts.GrpcRequestSchedulerOpts.LoggerName, "grpc_scheduler_logger_name", "grpc scheduler", "Logger for grpc Request Scheduler")
+	fs.StringVar(&opts.GrpcRequestSchedulerOpts.LoggerName, "grpc_scheduler_logger_name", "dapr.runtime.request.scheduler", "Logger for grpc Request Scheduler")
 	fs.BoolVar(&opts.GrpcRequestSchedulerOpts.EnableLogging, "grpc_scheduler_enable_logging", false, "Enable Grpc Scheduler Metrics Logging")
 	fs.IntVar(&opts.GrpcRequestSchedulerOpts.LoggingInterval, "grpc_scheduler_logging_interval", 10, "Logging interval for grpc Request Scheduler")
 

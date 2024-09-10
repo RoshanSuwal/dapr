@@ -65,16 +65,19 @@ func key(method string, endpoint string) string {
 	return method + " " + endpoint
 }
 
+var _logger = logger.NewLogger("dapr.runtime.request_scheduler.metrics")
+var log = logger.NewLogger("dapr.runtime.request_scheduler.info")
+
 type RequestScheduler struct {
 	policy           SchedulingPolicy
 	ScRequestChan    chan *ScRequest
 	ScWorkerChan     chan struct{}
 	activeWorkers    int64
 	totalWorkers     int64
-	logger           logger.Logger
+	Logger           logger.Logger
 	stateStore       state.Store
 	ctx              context.Context
-	enableScheduling bool
+	EnableScheduling bool
 	enableLogging    bool
 	loggingInterval  int
 	defaultBudget    int64
@@ -152,7 +155,7 @@ func (s *RequestScheduler) updateBudget(r *ScRequest) {
 				},
 			})
 			if err != nil {
-				s.logger.Error("failed to set remaining budget", zap.Error(err))
+				s.Logger.Error("failed to set remaining budget", zap.Error(err))
 			}
 		}
 	}
@@ -184,7 +187,7 @@ func (s *RequestScheduler) UpdateWorkers(allocateWorkers int64) {
 func (s *RequestScheduler) loadBudgets() {
 	file, err := os.Open(s.budgetPath)
 	if err != nil {
-		s.logger.Error("failed to open budget file", zap.Error(err))
+		s.Logger.Error("failed to open budget file", zap.Error(err))
 		return
 	}
 	defer file.Close()
@@ -193,7 +196,7 @@ func (s *RequestScheduler) loadBudgets() {
 
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&endpointBudgets); err != nil {
-		s.logger.Error("failed to decode budget file", zap.Error(err))
+		s.Logger.Error("failed to decode budget file", zap.Error(err))
 		return
 	}
 
@@ -204,23 +207,32 @@ func (s *RequestScheduler) loadBudgets() {
 }
 
 func (s *RequestScheduler) Run() {
+
+	if !s.EnableScheduling {
+		s.Logger.Info("request scheduler is disabled")
+		return
+	}
+
 	// load the budget first
-	s.logger.Info("Loading the budget from ", s.budgetPath, " with default budget=", s.defaultBudget)
+	log.Info("Loading the budget from ", s.budgetPath, " with default budget=", s.defaultBudget)
 	s.loadBudgets()
 	//
 	// register the workers
 	//Running the upstream
-	s.logger.Info("Starting the scheduler Upstream")
+	log.Info("Starting the scheduler Upstream")
 	go s.upstream()
-	s.logger.Info("Starting the scheduler Downstream")
+	log.Info("Starting the scheduler Downstream")
 	go s.downstream()
 	if s.enableLogging {
-		s.logger.Info("Starting the scheduler Logging with interval ", s.loggingInterval, " seconds")
+		log.Info("Starting the scheduler Logging with interval ", s.loggingInterval, " seconds")
 		go func() {
 			ticker := time.NewTicker(time.Duration(s.loggingInterval) * time.Second)
 			defer ticker.Stop()
 			for _ = range ticker.C {
-				s.logger.Info("RequestScheduler: Total workers = ", s.totalWorkers, " Active workers = ", s.activeWorkers)
+				log.WithFields(map[string]any{
+					"total_workers":  s.totalWorkers,
+					"active_workers": s.activeWorkers,
+				}).Info("worker_stats")
 			}
 		}()
 	}
@@ -234,10 +246,10 @@ func newRequestScheduler(policy SchedulingPolicy, maxWorkers int64, requestChann
 		activeWorkers:    0,
 		ScWorkerChan:     make(chan struct{}, maxWorkers),
 		ScRequestChan:    make(chan *ScRequest, requestChannelSize),
-		logger:           logger,
+		Logger:           logger,
 		stateStore:       store,
 		ctx:              ctx,
-		enableScheduling: enableScheduling,
+		EnableScheduling: enableScheduling,
 		enableLogging:    enableLogging,
 		loggingInterval:  loggingInterval,
 		defaultBudget:    defaultBudget,
@@ -247,11 +259,12 @@ func newRequestScheduler(policy SchedulingPolicy, maxWorkers int64, requestChann
 }
 
 func NewRequestSchedulerFromConfig(opts RequestSchedulerOpts) *RequestScheduler {
+	ctx := context.Background()
 	if !opts.EnableScheduling {
-		return &RequestScheduler{enableScheduling: false}
+		return &RequestScheduler{EnableScheduling: false, enableLogging: false, ctx: ctx, Logger: _logger}
 	}
 
-	_logger := logger.NewLogger(opts.LoggerName)
+	//_logger := logger.NewLogger(opts.LoggerName)
 	redisOpts := map[string]string{
 		"redisHost": opts.RedisHost,
 		"database":  opts.RedisDatabase,
@@ -259,12 +272,22 @@ func NewRequestSchedulerFromConfig(opts RequestSchedulerOpts) *RequestScheduler 
 	}
 
 	stateStore := redis.NewRedisStateStore(_logger)
-	ctx := context.Background()
 	if err := stateStore.Init(ctx, state.Metadata{Base: metadata.Base{Properties: redisOpts}}); err != nil {
 		_logger.Info("redis state store init failed ", err.Error())
 	}
 
-	scheduler := newRequestScheduler(NewPolicy(opts.RequestSchedulingPolicy), int64(opts.MaxWorker), int64(opts.RequestChanCapacity), _logger, stateStore, ctx, opts.EnableLogging, opts.EnableLogging, opts.LoggingInterval, int64(opts.DefaultBudget), opts.BudgetConfigPath)
+	scheduler := newRequestScheduler(
+		NewPolicy(opts.RequestSchedulingPolicy),
+		int64(opts.MaxWorker),
+		int64(opts.RequestChanCapacity),
+		_logger,
+		stateStore,
+		ctx,
+		opts.EnableScheduling,
+		opts.EnableLogging,
+		opts.LoggingInterval,
+		int64(opts.DefaultBudget),
+		opts.BudgetConfigPath)
 	scheduler.UpdateWorkers(int64(opts.Worker))
 	return scheduler
 }

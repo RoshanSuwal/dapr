@@ -17,6 +17,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
+	"github.com/google/uuid"
+	"google.golang.org/grpc/metadata"
 	"io"
 	"os"
 	"strings"
@@ -75,6 +78,7 @@ type directMessaging struct {
 	compStore           *compstore.ComponentStore
 	resolverCache       *ttlcache.Cache[nr.AddressList]
 	closed              atomic.Bool
+	requestScheduler    *requestScheduler.RequestScheduler
 }
 
 type remoteApp struct {
@@ -99,6 +103,7 @@ type NewDirectMessagingOpts struct {
 	Proxy              Proxy
 	ReadBufferSize     int
 	Resiliency         resiliency.Provider
+	RequestScheduler   *requestScheduler.RequestScheduler
 }
 
 // NewDirectMessaging returns a new direct messaging api.
@@ -121,6 +126,7 @@ func NewDirectMessaging(opts NewDirectMessagingOpts) invokev1.DirectMessaging {
 		hostAddress:         hAddr,
 		hostName:            hName,
 		compStore:           opts.CompStore,
+		requestScheduler:    opts.RequestScheduler,
 	}
 
 	// Set resolverMulti if the resolver implements the ResolverMulti interface
@@ -162,11 +168,75 @@ func (d *directMessaging) Invoke(ctx context.Context, targetAppID string, req *i
 		return d.invokeWithRetry(ctx, retry.DefaultLinearRetryCount, retry.DefaultLinearBackoffInterval, app, d.invokeHTTPEndpoint, req)
 	}
 
+	// TODO : implement scheduling logic
 	if app.id == d.appID && app.namespace == d.namespace {
-		return d.invokeLocal(ctx, req)
+		//return d.invokeLocal(ctx, req)
+		return d.invokeWithScheduler(ctx, targetAppID, req)
 	}
 
 	return d.invokeWithRetry(ctx, retry.DefaultLinearRetryCount, retry.DefaultLinearBackoffInterval, app, d.invokeRemote, req)
+}
+
+func (d *directMessaging) invokeWithScheduler(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error) {
+
+	if d.requestScheduler.EnableScheduling {
+		md, ok := metadata.FromIncomingContext(ctx)
+		if !ok {
+			md = metadata.New(nil)
+			d.requestScheduler.Logger.Error(fmt.Errorf("failed to get metadata from context"), ok)
+		}
+
+		//d.requestScheduler.Logger.Info("request: %v", req.Metadata())
+
+		scRequest := &requestScheduler.ScRequest{
+			Endpoint:         req.Message().Method,
+			Method:           "RPC",
+			RequestTimestamp: time.Now().UnixNano() / 1e3,
+			ServiceSig:       make(chan struct{}),
+			Budget:           0,
+			Service:          d.appID,
+			//RID:              md.Get("dapr-rid")[0],s
+		}
+
+		if rids := md.Get("dapr-rid"); len(rids) > 0 {
+			scRequest.RID = rids[0]
+		} else {
+			scRequest.RID = uuid.New().String()
+			m := make(map[string][]string)
+			m["dapr-rid"] = []string{scRequest.RID}
+			req.AddMetadata(m)
+		}
+		ctx = metadata.NewOutgoingContext(ctx, md)
+
+		d.requestScheduler.RegisterRequest(scRequest)
+		// Get the request service signal and
+		// worker along with it from worker pool
+		<-scRequest.ServiceSig
+		defer close(scRequest.ServiceSig)
+
+		res, err := d.invokeLocal(ctx, req)
+
+		scRequest.ServiceTime = time.Now().UnixMicro() - scRequest.RequestTimestamp - scRequest.QueuingDelay
+		// Add register worker back to pool to server next request in Request Scheduler
+		d.requestScheduler.RegisterWorker()
+
+		d.requestScheduler.Logger.WithFields(map[string]any{
+			"method":           scRequest.Method,
+			"endpoint":         scRequest.Endpoint,
+			"queuing_delay":    scRequest.QueuingDelay,
+			"service_time":     scRequest.ServiceTime,
+			"budget":           scRequest.Budget,
+			"remaining_budget": scRequest.RemainingBudget,
+			"RID":              scRequest.RID,
+			"response_time":    scRequest.ServiceTime + scRequest.QueuingDelay,
+			"service":          scRequest.Service,
+		}).Info("request.scheduler")
+
+		// Return the response
+		return res, err
+	} else {
+		return d.invokeLocal(ctx, req)
+	}
 }
 
 // requestAppIDAndNamespace takes an app id and returns the app id, namespace and error.

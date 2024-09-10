@@ -114,15 +114,16 @@ func (s *server) StartNonBlocking() error {
 	s.useCors(r)
 	s.useComponents(r)
 	s.useAPILogging(r)
-	s.useRequestScheduling(r)
+	//s.AddRequestID(r)
+	//s.useRequestScheduling(r)
 
 	// Add all routes
 	s.setupRoutes(r, s.api.APIEndpoints())
 
 	// TODO: Run the request scheduler and initialize the workers
-	if s.config.RequestSchedulerOpts.EnableScheduling {
-		s.scheduler.Run()
-	}
+	//if s.config.RequestSchedulerOpts.EnableScheduling {
+	//	s.scheduler.Run()
+	//}
 
 	var listeners []net.Listener
 	var profilingListeners []net.Listener
@@ -317,6 +318,20 @@ func (s *server) useContextSetup(mux chi.Router) {
 	mux.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := context.WithValue(r.Context(), endpoints.EndpointCtxKey{}, &endpoints.EndpointCtxData{})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	})
+}
+
+func (s *server) AddRequestID(mux chi.Router) {
+	mux.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			daprRid := r.Header.Get("dapr-rid")
+			if daprRid == "" {
+				daprRid = uuid.New().String()
+				r.Header.Add("dapr-rid", daprRid)
+			}
+			ctx := context.WithValue(r.Context(), "dapr-rid", daprRid)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	})

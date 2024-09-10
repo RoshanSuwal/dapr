@@ -236,9 +236,9 @@ func (s *server) StartNonBlocking() error {
 		}(server, listener)
 	}
 
-	if s.config.RequestSchedulerOpts.EnableScheduling && s.kind == apiServer {
-		s.scheduler.Run()
-	}
+	//if s.config.RequestSchedulerOpts.EnableScheduling && s.kind == apiServer {
+	//	s.scheduler.Run()
+	//}
 
 	s.htarget.Ready()
 	return nil
@@ -322,11 +322,11 @@ func (s *server) getMiddlewareOptions() []grpcGo.ServerOption {
 	}
 
 	// TODO : finding appropriate place to run request scheduler
-	if s.config.RequestSchedulerOpts.EnableScheduling {
-		urs, srs := s.withRequestScheduling()
-		intr = append(intr, urs)
-		intrStream = append(intrStream, srs)
-	}
+	//if s.config.RequestSchedulerOpts.EnableScheduling {
+	//	urs, srs := s.withRequestScheduling()
+	//	intr = append(intr, urs)
+	//	intrStream = append(intrStream, srs)
+	//}
 
 	return []grpcGo.ServerOption{
 		grpcGo.UnaryInterceptor(grpcMiddleware.ChainUnaryServer(intr...)),
