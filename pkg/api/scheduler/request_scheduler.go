@@ -9,6 +9,7 @@ import (
 	"github.com/dapr/kit/logger"
 	"go.uber.org/zap"
 	"os"
+	"runtime"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -88,6 +89,7 @@ type RequestScheduler struct {
 func (s *RequestScheduler) upstream() {
 	for r := range s.ScRequestChan {
 		//	Fetch the budget and schedule only if no workers are available
+		log.Info("[Registering request]", r.RID)
 		s.allocateBudget(r)
 		s.policy.Enqueue(r, r.RequestTimestamp+r.Budget)
 	}
@@ -100,6 +102,7 @@ func (s *RequestScheduler) downstream() {
 			r := s.policy.Dequeue().(*ScRequest)
 			r.QueuingDelay = time.Now().UnixMicro() - r.RequestTimestamp
 			r.RemainingBudget = r.Budget - r.QueuingDelay
+			log.Info("[Dispatching request]", r.RID)
 			r.ServiceSig <- struct{}{}
 			s.updateBudget(r)
 			s.updateActiveWorkers(1)
@@ -185,12 +188,17 @@ func (s *RequestScheduler) UpdateWorkers(allocateWorkers int64) {
 }
 
 func (s *RequestScheduler) loadBudgets() {
+	log.Info("Loading budget from ", s.budgetPath)
 	file, err := os.Open(s.budgetPath)
 	if err != nil {
 		s.Logger.Error("failed to open budget file", zap.Error(err))
 		return
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+		}
+	}(file)
 
 	var endpointBudgets []EndpointBudget
 
@@ -230,8 +238,9 @@ func (s *RequestScheduler) Run() {
 			defer ticker.Stop()
 			for _ = range ticker.C {
 				log.WithFields(map[string]any{
-					"total_workers":  s.totalWorkers,
-					"active_workers": s.activeWorkers,
+					"total_workers":   s.totalWorkers,
+					"active_workers":  s.activeWorkers,
+					"num_go_routines": runtime.NumGoroutine(),
 				}).Info("worker_stats")
 			}
 		}()
@@ -266,9 +275,9 @@ func NewRequestSchedulerFromConfig(opts RequestSchedulerOpts) *RequestScheduler 
 
 	//_logger := logger.NewLogger(opts.LoggerName)
 	redisOpts := map[string]string{
-		"redisHost": opts.RedisHost,
-		"database":  opts.RedisDatabase,
-		"password":  opts.RedisPassword,
+		"redisHost":     opts.RedisHost,
+		"database":      opts.RedisDatabase,
+		"redisPassword": opts.RedisPassword,
 	}
 
 	stateStore := redis.NewRedisStateStore(_logger)

@@ -110,8 +110,8 @@ func LoadOptForRequestScheduler(fs *pflag.FlagSet, opts *Options) {
 
 	opts.GrpcRequestSchedulerOpts = scheduler.RequestSchedulerOpts{}
 
-	fs.IntVar(&opts.GrpcRequestSchedulerOpts.MaxWorker, "grpc_scheduler_max_workers", 100, "Max Workers used for HTTP Request Scheduler")
-	fs.IntVar(&opts.GrpcRequestSchedulerOpts.RequestChanCapacity, "grpc_scheduler_rs_chan_capacity", 100, "Request Channel Capacity used for grpc Request Scheduler")
+	fs.IntVar(&opts.GrpcRequestSchedulerOpts.MaxWorker, "grpc_scheduler_max_workers", 1000, "Max Workers used for HTTP Request Scheduler")
+	fs.IntVar(&opts.GrpcRequestSchedulerOpts.RequestChanCapacity, "grpc_scheduler_rs_chan_capacity", 1000, "Request Channel Capacity used for grpc Request Scheduler")
 	fs.IntVar(&opts.GrpcRequestSchedulerOpts.Worker, "grpc_scheduler_worker", 1, "Workers to serve grpc request for grpc Request Scheduler")
 	fs.StringVar(&opts.GrpcRequestSchedulerOpts.RequestSchedulingPolicy, "grpc_scheduler_policy", "fifo", "Scheduling Policy for grpc Request Scheduler")
 
