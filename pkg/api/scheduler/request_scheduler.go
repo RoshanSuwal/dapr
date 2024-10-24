@@ -41,13 +41,13 @@ type ScRequest struct {
 	Service             string
 	RequestTimestamp    int64
 	Budget              int64
+	Priority            int64
 	QueuingDelay        int64
 	ServiceTime         int64
 	CompletionTimestamp time.Time
 	ServiceSig          chan struct{}
 	QueueSize           int
 	ActiveConnections   int
-	priority            int
 	index               int
 	UberTraceId         string
 	TraceId             string
@@ -91,7 +91,7 @@ func (s *RequestScheduler) upstream() {
 		//	Fetch the budget and schedule only if no workers are available
 		log.Info("[Registering request]", r.RID)
 		s.allocateBudget(r)
-		s.policy.Enqueue(r, r.RequestTimestamp+r.Budget)
+		s.policy.Enqueue(r, r.Priority)
 	}
 }
 
@@ -120,6 +120,7 @@ func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 	// Just allocate budget to 0 as no budget is going to be used for this request
 	if s.policy.Name() == "fifo" {
 		r.Budget = 0
+		r.Priority = 0
 		return
 	} else if s.policy.Name() == "edf" {
 		// TODO: fetch budget from budget server
@@ -143,6 +144,23 @@ func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 				}
 			}
 		}
+		r.Priority = r.RequestTimestamp + r.Budget
+		return
+	} else if s.policy.Name() == "rat" { // request arrival time
+		st, err := s.stateStore.Get(s.ctx, &state.GetRequest{Key: r.RID})
+		if err != nil {
+			r.Budget += 0
+			r.Priority = r.RequestTimestamp
+		} else {
+			b, err := strconv.Atoi(string(st.Data))
+			if err != nil {
+				r.Budget += 0
+				r.Priority = r.RequestTimestamp
+			} else {
+				r.Budget = int64(b)
+				r.Priority = int64(b)
+			}
+		}
 	}
 	return
 }
@@ -153,6 +171,18 @@ func (s *RequestScheduler) updateBudget(r *ScRequest) {
 			//	TODO: update budget to budget server
 			err := s.stateStore.Set(s.ctx, &state.SetRequest{Key: r.RID,
 				Value: r.RemainingBudget,
+				Metadata: map[string]string{
+					"ttlInSeconds": "20",
+				},
+			})
+			if err != nil {
+				s.Logger.Error("failed to set remaining budget", zap.Error(err))
+			}
+		}
+	} else if s.policy.Name() == "rat" {
+		if r.Priority == r.RequestTimestamp {
+			err := s.stateStore.Set(s.ctx, &state.SetRequest{Key: r.RID,
+				Value: r.RequestTimestamp,
 				Metadata: map[string]string{
 					"ttlInSeconds": "20",
 				},

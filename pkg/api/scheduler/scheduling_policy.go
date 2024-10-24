@@ -143,12 +143,54 @@ func (p *EarliestDeadlineFirstSchedulingPolicy) Name() string {
 	return "edf"
 }
 
+type RequestArrivalTimeSchedulingPolicy struct {
+	queue PriorityQueue
+	c     *sync.Cond
+	mutex *sync.Mutex
+}
+
+func NewRequestArrivalTimeSchedulingPolicy(queueSize int) *RequestArrivalTimeSchedulingPolicy {
+	e := &RequestArrivalTimeSchedulingPolicy{
+		queue: make(PriorityQueue, queueSize),
+		mutex: &sync.Mutex{},
+	}
+	e.c = sync.NewCond(e.mutex)
+	return e
+}
+
+func (p *RequestArrivalTimeSchedulingPolicy) Enqueue(x interface{}, priority int64) {
+	p.mutex.Lock()
+	heap.Push(&p.queue, &Item{value: x, priority: priority})
+	p.mutex.Unlock()
+	p.c.Signal()
+
+}
+
+func (p *RequestArrivalTimeSchedulingPolicy) Dequeue() interface{} {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	for p.queue.Len() == 0 {
+		p.c.Wait()
+	}
+	return heap.Pop(&p.queue).(*Item).value
+}
+
+func (p *RequestArrivalTimeSchedulingPolicy) length() int {
+	return p.queue.Len()
+}
+
+func (p *RequestArrivalTimeSchedulingPolicy) Name() string {
+	return "rat"
+}
+
 func NewPolicy(policyName string) SchedulingPolicy {
 	switch policyName {
 	case "fifo":
 		return NewFifoSchedulingPolicy(0)
 	case "edf":
 		return NewEarliestDeadlineFirstQueuingPolicy(0)
+	case "rat":
+		return NewRequestArrivalTimeSchedulingPolicy(0)
 	default:
 		return NewFifoSchedulingPolicy(0)
 	}

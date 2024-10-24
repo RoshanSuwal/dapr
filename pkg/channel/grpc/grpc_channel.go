@@ -160,6 +160,7 @@ func (g *Channel) invokerMethodV1WithScheduler(ctx context.Context, req *invokev
 			RequestTimestamp: time.Now().UnixNano() / 1e3,
 			ServiceSig:       make(chan struct{}),
 			Budget:           0,
+			Priority:         0,
 			//RID:              md.Get("dapr-rid")[0],s
 		}
 
@@ -192,6 +193,8 @@ func (g *Channel) invokerMethodV1WithScheduler(ctx context.Context, req *invokev
 			"RID":              scRequest.RID,
 			"response_time":    scRequest.ServiceTime + scRequest.QueuingDelay,
 			"service":          scRequest.Service,
+			"priority":         scRequest.Priority,
+			"arrival_time":     scRequest.RequestTimestamp,
 		}).Info("request.scheduler")
 
 		return response, err
