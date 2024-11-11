@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
 	"strings"
 
 	"github.com/dapr/components-contrib/metadata"
@@ -63,7 +64,8 @@ type Subscription struct {
 	adapter         rtpubsub.Adapter
 	adapterStreamer rtpubsub.AdapterStreamer
 
-	cancel func()
+	cancel           func()
+	requestScheduler *requestScheduler.RequestScheduler
 }
 
 var log = logger.NewLogger("dapr.runtime.processor.pubsub.subscription")

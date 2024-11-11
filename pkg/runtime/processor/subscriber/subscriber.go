@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
 	"sync"
 	"sync/atomic"
 
@@ -59,13 +60,14 @@ type Subscriber struct {
 	adapter         rtpubsub.Adapter
 	adapterStreamer rtpubsub.AdapterStreamer
 
-	appSubs      map[string][]*namedSubscription
-	streamSubs   map[string][]*namedSubscription
-	appSubActive bool
-	hasInitProg  bool
-	lock         sync.RWMutex
-	running      atomic.Bool
-	closed       bool
+	appSubs          map[string][]*namedSubscription
+	streamSubs       map[string][]*namedSubscription
+	appSubActive     bool
+	hasInitProg      bool
+	lock             sync.RWMutex
+	running          atomic.Bool
+	closed           bool
+	RequestScheduler *requestScheduler.RequestScheduler
 }
 
 type namedSubscription struct {
@@ -90,6 +92,10 @@ func New(opts Options) *Subscriber {
 		appSubs:         make(map[string][]*namedSubscription),
 		streamSubs:      make(map[string][]*namedSubscription),
 	}
+}
+
+func (s *Subscriber) SetRequestScheduler(rs *requestScheduler.RequestScheduler) {
+	s.RequestScheduler = rs
 }
 
 func (s *Subscriber) Run(ctx context.Context) error {
@@ -442,7 +448,7 @@ func (s *Subscriber) startSubscription(pubsub *rtpubsub.PubsubItem, comp *compst
 	if isStreamer {
 		streamer = s.adapterStreamer
 	}
-	return subscription.New(subscription.Options{
+	s2, err := subscription.New(subscription.Options{
 		AppID:           s.appID,
 		Namespace:       s.namespace,
 		PubSubName:      comp.PubsubName,
@@ -457,4 +463,10 @@ func (s *Subscriber) startSubscription(pubsub *rtpubsub.PubsubItem, comp *compst
 		Adapter:         s.adapter,
 		AdapterStreamer: streamer,
 	})
+
+	if err == nil {
+		s2.SetRequestScheduler(s.RequestScheduler)
+	}
+
+	return s2, err
 }

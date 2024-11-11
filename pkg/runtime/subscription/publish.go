@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
 	"io"
 	"net/http"
 	"strings"
@@ -129,7 +130,154 @@ func (s *Subscription) publishMessageHTTP(ctx context.Context, msg *rtpubsub.Sub
 	return rterrors.NewRetriable(errors.New(errMsg))
 }
 
-func (s *Subscription) publishMessageGRPC(ctx context.Context, msg *rtpubsub.SubscribedMessage) error {
+func (s *Subscription) SetRequestScheduler(rs *requestScheduler.RequestScheduler) {
+	s.requestScheduler = rs
+}
+
+func (s *Subscription) publishMessageGRPCWithScheduler(ctx context.Context, msg *rtpubsub.SubscribedMessage) error {
+	/* TODO : scheduling the msg queue events
+	1. Get  the scheduler
+	2. Get the RID
+	3. Set method
+	4. get pub sub name : url : pubsubname-topic
+	5.
+	*/
+	cloudEvent := msg.CloudEvent
+
+	envelope, span, err := rtpubsub.GRPCEnvelopeFromSubscriptionMessage(ctx, msg, log, s.tracingSpec)
+	if err != nil {
+		return err
+	}
+
+	layout := "2024-10-28T17:55:54-05:00"
+	value := cloudEvent[contribpubsub.TimeField].(string)
+	pubSubTime, err := time.Parse(layout, value)
+	if err != nil {
+		pubSubTime = time.Now()
+	}
+	scRequest := &requestScheduler.ScRequest{
+		Endpoint: msg.Topic,
+		Method:   "MSQ",
+		//RequestTimestamp: time.Now().UnixMicro(),
+		RequestTimestamp: pubSubTime.UnixMicro(),
+		ServiceSig:       make(chan struct{}),
+		Budget:           0,
+		Priority:         0,
+	}
+
+	md := msg.Metadata
+	//id -> 6326d9fa-b3c9-4b7d-a22c-1a889eb1753f
+	if id, ok := md["id"]; ok {
+		envelope.Id = id
+		msg.CloudEvent["id"] = id
+	}
+
+	scRequest.RID = envelope.Id
+
+	if md == nil {
+		md = make(map[string]string)
+	}
+	md["dapr-rid"] = scRequest.RID
+
+	//if rid, ok := md["dapr-rid"]; ok {
+	//	scRequest.RID = rid
+	//} else {
+	//	scRequest.RID = uuid.New().String()
+	//	if md == nil {
+	//		md = make(map[string]string)
+	//	}
+	//	md["dapr-rid"] = scRequest.RID
+	//}
+
+	msg.CloudEvent["RID"] = scRequest.RID
+
+	s.requestScheduler.RegisterRequest(scRequest)
+	<-scRequest.ServiceSig
+
+	// '04ad1ebd-c431-4852-8deb-16723c42ef02'
+	//'11cd67b0-80e3-433b-887a-233cc4b347d2'
+	defer close(scRequest.ServiceSig)
+
+	ctx = invokev1.WithCustomGRPCMetadata(ctx, md)
+
+	conn, err := s.grpc.GetAppClient()
+	if err != nil {
+		return fmt.Errorf("error while getting app client: %w", err)
+	}
+	clientV1 := runtimev1.NewAppCallbackClient(conn)
+
+	start := time.Now()
+	res, err := clientV1.OnTopicEvent(ctx, envelope)
+	elapsed := diag.ElapsedSince(start)
+
+	// calculating the service time
+	scRequest.ServiceTime = time.Now().UnixMicro() - scRequest.RequestTimestamp - scRequest.QueuingDelay
+
+	// Returning the worker back to queue and logging
+	s.requestScheduler.RegisterWorker()
+	s.requestScheduler.Logger.WithFields(map[string]any{
+		"method":           scRequest.Method,
+		"endpoint":         scRequest.Endpoint,
+		"queuing_delay":    scRequest.QueuingDelay,
+		"service_time":     scRequest.ServiceTime,
+		"budget":           scRequest.Budget,
+		"remaining_budget": scRequest.RemainingBudget,
+		"RID":              scRequest.RID,
+		"response_time":    scRequest.ServiceTime + scRequest.QueuingDelay,
+		"service":          scRequest.Service,
+		"priority":         scRequest.Priority,
+		"arrival_time":     scRequest.RequestTimestamp,
+	}).Info("request.scheduler")
+
+	if span != nil {
+		m := diag.ConstructSubscriptionSpanAttributes(envelope.GetTopic())
+		diag.AddAttributesToSpan(span, m)
+		diag.UpdateSpanStatusFromGRPCError(span, err)
+		span.End()
+	}
+
+	if err != nil {
+		errStatus, hasErrStatus := status.FromError(err)
+		if hasErrStatus && (errStatus.Code() == codes.Unimplemented) {
+			// DROP
+			log.Warnf("non-retriable error returned from app while processing pub/sub event %v: %s", cloudEvent[contribpubsub.IDField], err)
+			diag.DefaultComponentMonitoring.PubsubIngressEvent(ctx, msg.PubSub, strings.ToLower(string(contribpubsub.Drop)), "", msg.Topic, elapsed)
+
+			return nil
+		}
+
+		err = fmt.Errorf("error returned from app while processing pub/sub event %v: %w", cloudEvent[contribpubsub.IDField], rterrors.NewRetriable(err))
+		log.Debug(err)
+		diag.DefaultComponentMonitoring.PubsubIngressEvent(ctx, msg.PubSub, strings.ToLower(string(contribpubsub.Retry)), "", msg.Topic, elapsed)
+
+		// on error from application, return error for redelivery of event
+		return err
+	}
+
+	switch res.GetStatus() {
+	case runtimev1.TopicEventResponse_SUCCESS: //nolint:nosnakecase
+		// on uninitialized status, this is the case it defaults to as an uninitialized status defaults to 0 which is
+		// success from protobuf definition
+		diag.DefaultComponentMonitoring.PubsubIngressEvent(ctx, msg.PubSub, strings.ToLower(string(contribpubsub.Success)), "", msg.Topic, elapsed)
+		return nil
+	case runtimev1.TopicEventResponse_RETRY: //nolint:nosnakecase
+		diag.DefaultComponentMonitoring.PubsubIngressEvent(ctx, msg.PubSub, strings.ToLower(string(contribpubsub.Retry)), "", msg.Topic, elapsed)
+		// TODO: add retry error info
+		return fmt.Errorf("RETRY status returned from app while processing pub/sub event %v: %w", cloudEvent[contribpubsub.IDField], rterrors.NewRetriable(nil))
+	case runtimev1.TopicEventResponse_DROP: //nolint:nosnakecase
+		log.Warnf("DROP status returned from app while processing pub/sub event %v", cloudEvent[contribpubsub.IDField])
+		diag.DefaultComponentMonitoring.PubsubIngressEvent(ctx, msg.PubSub, strings.ToLower(string(contribpubsub.Drop)), strings.ToLower(string(contribpubsub.Success)), msg.Topic, elapsed)
+
+		return rtpubsub.ErrMessageDropped
+	}
+
+	// Consider unknown status field as error and retry
+	diag.DefaultComponentMonitoring.PubsubIngressEvent(ctx, msg.PubSub, strings.ToLower(string(contribpubsub.Retry)), "", msg.Topic, elapsed)
+	return fmt.Errorf("unknown status returned from app while processing pub/sub event %v, status: %v, err: %w", cloudEvent[contribpubsub.IDField], res.GetStatus(), rterrors.NewRetriable(nil))
+
+}
+
+func (s *Subscription) publishMessageGRPCWithoutScheduler(ctx context.Context, msg *rtpubsub.SubscribedMessage) error {
 	cloudEvent := msg.CloudEvent
 
 	envelope, span, err := rtpubsub.GRPCEnvelopeFromSubscriptionMessage(ctx, msg, log, s.tracingSpec)
@@ -194,4 +342,12 @@ func (s *Subscription) publishMessageGRPC(ctx context.Context, msg *rtpubsub.Sub
 	// Consider unknown status field as error and retry
 	diag.DefaultComponentMonitoring.PubsubIngressEvent(ctx, msg.PubSub, strings.ToLower(string(contribpubsub.Retry)), "", msg.Topic, elapsed)
 	return fmt.Errorf("unknown status returned from app while processing pub/sub event %v, status: %v, err: %w", cloudEvent[contribpubsub.IDField], res.GetStatus(), rterrors.NewRetriable(nil))
+}
+
+func (s *Subscription) publishMessageGRPC(ctx context.Context, msg *rtpubsub.SubscribedMessage) error {
+	if s.requestScheduler.EnableScheduling {
+		return s.publishMessageGRPCWithScheduler(ctx, msg)
+	} else {
+		return s.publishMessageGRPCWithoutScheduler(ctx, msg)
+	}
 }

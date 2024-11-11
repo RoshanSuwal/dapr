@@ -16,7 +16,7 @@ package processor
 import (
 	"context"
 	"fmt"
-
+	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
 	"github.com/microsoft/durabletask-go/backend"
 
 	"github.com/dapr/components-contrib/bindings"
@@ -50,6 +50,7 @@ type SubscribeManager interface {
 	StopStreamerSubscription(pubsubName, key string)
 	ReloadPubSub(string) error
 	StopPubSub(string)
+	SetRequestScheduler(rs *requestScheduler.RequestScheduler)
 }
 
 type BindingManager interface {
