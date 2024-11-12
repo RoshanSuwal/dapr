@@ -161,6 +161,28 @@ func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 				r.Priority = int64(b)
 			}
 		}
+	} else if s.policy.Name() == "pq" { // priority queue
+		if endpointBudget, ok := s.budgets[key(r.Method, r.Endpoint)]; ok {
+			//fmt.Printf("Returning from endpoint budget map!!\n")
+			r.Budget = endpointBudget.Budget
+		} else {
+			r.Budget = s.defaultBudget
+		}
+
+		if s.activeWorkers >= s.totalWorkers {
+			st, err := s.stateStore.Get(s.ctx, &state.GetRequest{Key: r.RID})
+			if err != nil {
+				r.Budget += 0
+			} else {
+				b, err := strconv.Atoi(string(st.Data))
+				if err != nil {
+					r.Budget += 0
+				} else {
+					r.Budget = int64(b)
+				}
+			}
+		}
+		r.Priority = r.RequestTimestamp + r.Budget*10000000000000000 // 1730839889875183
 	}
 	return
 }
@@ -183,6 +205,18 @@ func (s *RequestScheduler) updateBudget(r *ScRequest) {
 		if r.Priority == r.RequestTimestamp {
 			err := s.stateStore.Set(s.ctx, &state.SetRequest{Key: r.RID,
 				Value: r.RequestTimestamp,
+				Metadata: map[string]string{
+					"ttlInSeconds": "20",
+				},
+			})
+			if err != nil {
+				s.Logger.Error("failed to set remaining budget", zap.Error(err))
+			}
+		}
+	} else if s.policy.Name() == "pq" {
+		if r.Budget != s.defaultBudget {
+			err := s.stateStore.Set(s.ctx, &state.SetRequest{Key: r.RID,
+				Value: r.Budget,
 				Metadata: map[string]string{
 					"ttlInSeconds": "20",
 				},
