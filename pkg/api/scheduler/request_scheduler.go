@@ -25,8 +25,9 @@ type RequestSchedulerOpts struct {
 	RedisDatabase string
 	RedisPassword string
 
-	BudgetConfigPath string
-	DefaultBudget    int
+	BudgetConfigPath     string
+	DefaultBudget        int
+	EnableBudgetTransfer bool
 
 	EnableScheduling bool
 	LoggerName       string
@@ -70,20 +71,21 @@ var _logger = logger.NewLogger("dapr.runtime.request_scheduler.metrics")
 var log = logger.NewLogger("dapr.runtime.request_scheduler.info")
 
 type RequestScheduler struct {
-	policy           SchedulingPolicy
-	ScRequestChan    chan *ScRequest
-	ScWorkerChan     chan struct{}
-	activeWorkers    int64
-	totalWorkers     int64
-	Logger           logger.Logger
-	stateStore       state.Store
-	ctx              context.Context
-	EnableScheduling bool
-	enableLogging    bool
-	loggingInterval  int
-	defaultBudget    int64
-	budgetPath       string
-	budgets          map[string]EndpointBudget
+	policy               SchedulingPolicy
+	ScRequestChan        chan *ScRequest
+	ScWorkerChan         chan struct{}
+	activeWorkers        int64
+	totalWorkers         int64
+	Logger               logger.Logger
+	stateStore           state.Store
+	ctx                  context.Context
+	EnableScheduling     bool
+	enableLogging        bool
+	loggingInterval      int
+	defaultBudget        int64
+	EnableBudgetTransfer bool
+	budgetPath           string
+	budgets              map[string]EndpointBudget
 }
 
 func (s *RequestScheduler) upstream() {
@@ -131,7 +133,8 @@ func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 			r.Budget = s.defaultBudget
 		}
 
-		if s.activeWorkers >= s.totalWorkers {
+		if s.EnableBudgetTransfer && s.activeWorkers >= s.totalWorkers {
+			log.Info("Fetching Budget")
 			st, err := s.stateStore.Get(s.ctx, &state.GetRequest{Key: r.RID})
 			if err != nil {
 				r.Budget += 0
@@ -144,6 +147,7 @@ func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 				}
 			}
 		}
+
 		r.Priority = r.RequestTimestamp + r.Budget
 		return
 	} else if s.policy.Name() == "rat" { // request arrival time
@@ -189,7 +193,8 @@ func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 
 func (s *RequestScheduler) updateBudget(r *ScRequest) {
 	if s.policy.Name() == "edf" {
-		if r.RemainingBudget > 0 {
+		if r.RemainingBudget > 0 && s.EnableBudgetTransfer {
+			log.Info("Transferring budget")
 			//	TODO: update budget to budget server
 			err := s.stateStore.Set(s.ctx, &state.SetRequest{Key: r.RID,
 				Value: r.RemainingBudget,
@@ -280,6 +285,18 @@ func (s *RequestScheduler) loadBudgets() {
 
 func (s *RequestScheduler) Run() {
 
+	s.Logger.
+		WithFields(map[string]any{
+			"N":                    s.totalWorkers,
+			"policy":               s.policy.Name(),
+			"EnableScheduling":     s.EnableScheduling,
+			"enableLogging":        s.enableLogging,
+			"loggingInterval":      s.loggingInterval,
+			"defaultBudget":        s.defaultBudget,
+			"budgetPath":           s.budgetPath,
+			"enableBudgetTransfer": s.EnableBudgetTransfer,
+		}).
+		Info("Running Request scheduler")
 	if !s.EnableScheduling {
 		s.Logger.Info("request scheduler is disabled")
 		return
@@ -312,22 +329,23 @@ func (s *RequestScheduler) Run() {
 
 }
 
-func newRequestScheduler(policy SchedulingPolicy, maxWorkers int64, requestChannelSize int64, logger logger.Logger, store state.Store, ctx context.Context, enableScheduling bool, enableLogging bool, loggingInterval int, defaultBudget int64, budgetPath string) *RequestScheduler {
+func newRequestScheduler(policy SchedulingPolicy, maxWorkers int64, requestChannelSize int64, logger logger.Logger, store state.Store, ctx context.Context, enableScheduling bool, enableLogging bool, loggingInterval int, defaultBudget int64, budgetPath string, enableBudgetTransfer bool) *RequestScheduler {
 	return &RequestScheduler{
-		policy:           policy,
-		totalWorkers:     0,
-		activeWorkers:    0,
-		ScWorkerChan:     make(chan struct{}, maxWorkers),
-		ScRequestChan:    make(chan *ScRequest, requestChannelSize),
-		Logger:           logger,
-		stateStore:       store,
-		ctx:              ctx,
-		EnableScheduling: enableScheduling,
-		enableLogging:    enableLogging,
-		loggingInterval:  loggingInterval,
-		defaultBudget:    defaultBudget,
-		budgetPath:       budgetPath,
-		budgets:          make(map[string]EndpointBudget),
+		policy:               policy,
+		totalWorkers:         0,
+		activeWorkers:        0,
+		ScWorkerChan:         make(chan struct{}, maxWorkers),
+		ScRequestChan:        make(chan *ScRequest, requestChannelSize),
+		Logger:               logger,
+		stateStore:           store,
+		ctx:                  ctx,
+		EnableScheduling:     enableScheduling,
+		enableLogging:        enableLogging,
+		loggingInterval:      loggingInterval,
+		defaultBudget:        defaultBudget,
+		budgetPath:           budgetPath,
+		budgets:              make(map[string]EndpointBudget),
+		EnableBudgetTransfer: enableBudgetTransfer,
 	}
 }
 
@@ -360,7 +378,8 @@ func NewRequestSchedulerFromConfig(opts RequestSchedulerOpts) *RequestScheduler 
 		opts.EnableLogging,
 		opts.LoggingInterval,
 		int64(opts.DefaultBudget),
-		opts.BudgetConfigPath)
+		opts.BudgetConfigPath,
+		opts.EnableBudgetTransfer)
 	scheduler.UpdateWorkers(int64(opts.Worker))
 	return scheduler
 }
@@ -390,7 +409,7 @@ func NewRequestScheduler(policyName string, maxWorkers int64, requestChannelSize
 		_logger,
 		redisStateStore,
 		ctx,
-		true, true, 30, 0, "",
+		true, true, 30, 0, "", true,
 	)
 	requestScheduler.UpdateWorkers(100)
 	return requestScheduler
