@@ -215,19 +215,26 @@ func (s *Subscription) publishMessageGRPCWithScheduler(ctx context.Context, msg 
 
 	// Returning the worker back to queue and logging
 	s.requestScheduler.RegisterWorker()
-	s.requestScheduler.Logger.WithFields(map[string]any{
-		"method":           scRequest.Method,
-		"endpoint":         scRequest.Endpoint,
-		"queuing_delay":    scRequest.QueuingDelay,
-		"service_time":     scRequest.ServiceTime,
-		"budget":           scRequest.Budget,
-		"remaining_budget": scRequest.RemainingBudget,
-		"RID":              scRequest.RID,
-		"response_time":    scRequest.ServiceTime + scRequest.QueuingDelay,
-		"service":          scRequest.Service,
-		"priority":         scRequest.Priority,
-		"arrival_time":     scRequest.RequestTimestamp,
-	}).Info("request.scheduler")
+
+	// Logging the metrics of request
+	s.requestScheduler.LogMetrics(scRequest)
+
+	// writing the monitoring metrics
+	s.requestScheduler.SchedulerMetricMonitoring.MonitorRequestDataFromScRequest(ctx, scRequest)
+
+	//s.requestScheduler.Logger.WithFields(map[string]any{
+	//	"method":           scRequest.Method,
+	//	"endpoint":         scRequest.Endpoint,
+	//	"queuing_delay":    scRequest.QueuingDelay,
+	//	"service_time":     scRequest.ServiceTime,
+	//	"budget":           scRequest.Budget,
+	//	"remaining_budget": scRequest.RemainingBudget,
+	//	"RID":              scRequest.RID,
+	//	"response_time":    scRequest.ServiceTime + scRequest.QueuingDelay,
+	//	"service":          scRequest.Service,
+	//	"priority":         scRequest.Priority,
+	//	"arrival_time":     scRequest.RequestTimestamp,
+	//}).Info("request.scheduler")
 
 	if span != nil {
 		m := diag.ConstructSubscriptionSpanAttributes(envelope.GetTopic())

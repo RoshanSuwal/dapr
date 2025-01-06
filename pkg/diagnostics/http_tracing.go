@@ -15,6 +15,7 @@ package diagnostics
 
 import (
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -200,6 +201,9 @@ func spanAttributesMapFromHTTPContext(rw responsewriter.ResponseWriter, r *http.
 	m[diagConsts.DaprAPIProtocolSpanAttributeKey] = diagConsts.DaprAPIHTTPSpanAttrValue
 	m[diagConsts.DaprAPISpanAttributeKey] = r.Method + " " + r.URL.Path
 	m[diagConsts.DaprAPIStatusCodeSpanAttributeKey] = strconv.Itoa(rw.Status())
+
+	hostname, _ := os.Hostname()
+	m["instance"] = hostname
 
 	// OTel convention attributes
 	m[diagConsts.OtelSpanConvHTTPRequestMethodAttributeKey] = r.Method

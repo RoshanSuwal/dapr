@@ -99,6 +99,7 @@ func LoadOptForRequestScheduler(fs *pflag.FlagSet, opts *Options) {
 	fs.StringVar(&opts.HttpRequestSchedulerOpts.BudgetConfigPath, "http_scheduler_budget_path", "", "Budget Config Path for HTTP Request Scheduler")
 	fs.IntVar(&opts.HttpRequestSchedulerOpts.DefaultBudget, "http_scheduler_default_budget", 0, "Default Budget for HTTP Request Scheduler")
 	fs.BoolVar(&opts.HttpRequestSchedulerOpts.EnableBudgetTransfer, "http_scheduler_enable_budget_transfer", false, "Default Budget for http Request Scheduler")
+	fs.IntVar(&opts.HttpRequestSchedulerOpts.BudgetTTL, "http_scheduler_budget_ttl", 20, "TTL for budget transfer in sec")
 
 	fs.StringVar(&opts.HttpRequestSchedulerOpts.RedisHost, "http_scheduler_redis_host", "localhost:6379", "Redis Host for HTTP Request Scheduler")
 	fs.StringVar(&opts.HttpRequestSchedulerOpts.RedisDatabase, "http_scheduler_redis_database", "0", "Redis database for HTTP Request Scheduler")
@@ -119,6 +120,7 @@ func LoadOptForRequestScheduler(fs *pflag.FlagSet, opts *Options) {
 	fs.StringVar(&opts.GrpcRequestSchedulerOpts.BudgetConfigPath, "grpc_scheduler_budget_path", "", "Budget Config Path for grpc Request Scheduler")
 	fs.IntVar(&opts.GrpcRequestSchedulerOpts.DefaultBudget, "grpc_scheduler_default_budget", 0, "Default Budget for grpc Request Scheduler")
 	fs.BoolVar(&opts.GrpcRequestSchedulerOpts.EnableBudgetTransfer, "grpc_scheduler_enable_budget_transfer", false, "Default Budget for grpc Request Scheduler")
+	fs.IntVar(&opts.GrpcRequestSchedulerOpts.BudgetTTL, "grpc_scheduler_budget_ttl", 20, "TTL for budget transfer in sec")
 
 	fs.StringVar(&opts.GrpcRequestSchedulerOpts.RedisHost, "grpc_scheduler_redis_host", "localhost:6379", "Redis Host for grpc Request Scheduler")
 	fs.StringVar(&opts.GrpcRequestSchedulerOpts.RedisDatabase, "grpc_scheduler_redis_database", "0", "Redis database for grpc Request Scheduler")

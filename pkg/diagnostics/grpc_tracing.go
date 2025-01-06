@@ -16,6 +16,7 @@ package diagnostics
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	grpcMiddleware "github.com/grpc-ecosystem/go-grpc-middleware"
@@ -318,6 +319,9 @@ func spanAttributesMapFromGRPC(appID string, req any, rpcMethod string) map[stri
 
 	m[diagConsts.DaprAPIProtocolSpanAttributeKey] = diagConsts.DaprAPIGRPCSpanAttrValue
 	m[diagConsts.DaprAPISpanAttributeKey] = rpcMethod
+
+	hostname, _ := os.Hostname()
+	m["instance"] = hostname
 
 	return m
 }

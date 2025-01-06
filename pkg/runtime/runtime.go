@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
+	"go.opencensus.io/stats/view"
 	"io"
 	"net"
 	"os"
@@ -870,6 +871,15 @@ func (a *DaprRuntime) populateSecretsConfiguration() {
 func (a *DaprRuntime) initRequestScheduler() {
 	log.Info("Initializing Request scheduler")
 	a.requestScheduler = requestScheduler.NewRequestSchedulerFromConfig(a.runtimeConfig.GrpcRequestSchedulerOpts)
+	// TODO : Initializing Scheduler metric Monitoring
+	log.Info("Initializing Request Scheduler Monitoring")
+	if a.requestScheduler.EnableScheduling {
+		defaultLatencyDistribution := []float64{1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 20, 25, 30, 40, 50, 65, 80, 100, 130, 160, 200, 250, 300, 400, 500, 650, 800, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000}
+		err := a.requestScheduler.SchedulerMetricMonitoring.Init(a.runtimeConfig.id, view.Distribution(defaultLatencyDistribution...))
+		if err != nil {
+			log.Errorf(rterrors.NewInit(rterrors.InitFailure, "scheduler metrics", err).Error())
+		}
+	}
 }
 
 // TODO add the logic of Scheduler in Direct Messaging

@@ -167,6 +167,8 @@ func (g *Channel) invokerMethodV1WithScheduler(ctx context.Context, req *invokev
 		md := req.Metadata()
 		if rids, ok := md["dapr-rid"]; ok {
 			scRequest.RID = rids.GetValues()[0]
+		} else if rids, ok = md["Dapr-Rid"]; ok {
+			scRequest.RID = rids.GetValues()[0]
 		} else {
 			scRequest.RID = uuid.New().String()
 			m := make(map[string][]string)
@@ -183,19 +185,24 @@ func (g *Channel) invokerMethodV1WithScheduler(ctx context.Context, req *invokev
 		// Add register worker back to pool to server next request in Request Scheduler
 		g.requestScheduler.RegisterWorker()
 
-		g.requestScheduler.Logger.WithFields(map[string]any{
-			"method":           scRequest.Method,
-			"endpoint":         scRequest.Endpoint,
-			"queuing_delay":    scRequest.QueuingDelay,
-			"service_time":     scRequest.ServiceTime,
-			"budget":           scRequest.Budget,
-			"remaining_budget": scRequest.RemainingBudget,
-			"RID":              scRequest.RID,
-			"response_time":    scRequest.ServiceTime + scRequest.QueuingDelay,
-			"service":          scRequest.Service,
-			"priority":         scRequest.Priority,
-			"arrival_time":     scRequest.RequestTimestamp,
-		}).Info("request.scheduler")
+		// log the request metric
+		g.requestScheduler.LogMetrics(scRequest)
+
+		// monitoring the request metrics
+		g.requestScheduler.SchedulerMetricMonitoring.MonitorRequestDataFromScRequest(ctx, scRequest)
+		//g.requestScheduler.Logger.WithFields(map[string]any{
+		//	"method":           scRequest.Method,
+		//	"endpoint":         scRequest.Endpoint,
+		//	"queuing_delay":    scRequest.QueuingDelay,
+		//	"service_time":     scRequest.ServiceTime,
+		//	"budget":           scRequest.Budget,
+		//	"remaining_budget": scRequest.RemainingBudget,
+		//	"RID":              scRequest.RID,
+		//	"response_time":    scRequest.ServiceTime + scRequest.QueuingDelay,
+		//	"service":          scRequest.Service,
+		//	"priority":         scRequest.Priority,
+		//	"arrival_time":     scRequest.RequestTimestamp,
+		//}).Info("request.scheduler")
 
 		return response, err
 	} else {
