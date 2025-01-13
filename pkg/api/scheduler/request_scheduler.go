@@ -8,6 +8,7 @@ import (
 	"github.com/dapr/components-contrib/state/redis"
 	diagUtils "github.com/dapr/dapr/pkg/diagnostics/utils"
 	"github.com/dapr/kit/logger"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
@@ -70,19 +71,21 @@ type EndpointBudget struct {
 
 // SchedulerMetrics Scheduler Monitoring
 var (
-	appIDKey    = tag.MustNewKey("app_id")
-	KeyMethod   = tag.MustNewKey("method")
-	KeyEndpoint = tag.MustNewKey("endpoint")
+	appIDKey                 = tag.MustNewKey("app_id")
+	KeyMethod                = tag.MustNewKey("method")
+	KeyEndpoint              = tag.MustNewKey("endpoint")
+	KeyBudgetViolationStatus = tag.MustNewKey("budget_violation_status")
 )
 
 type schedulerMetricsMonitoring struct {
-	appId        string
-	enabled      bool
-	queuingDelay *stats.Float64Measure
-	serviceTime  *stats.Float64Measure
-	responseTime *stats.Float64Measure
-	queueSize    *stats.Int64Measure
-	budget       *stats.Float64Measure
+	appId                        string
+	enabled                      bool
+	queuingDelay                 *stats.Float64Measure
+	serviceTime                  *stats.Float64Measure
+	responseTime                 *stats.Float64Measure
+	queueSize                    *stats.Int64Measure
+	budget                       *stats.Float64Measure
+	serviceTimeResponseTimeRatio *stats.Float64Measure // service_time / response_time
 }
 
 func newSchedulerMetricsMonitoring() *schedulerMetricsMonitoring {
@@ -107,6 +110,10 @@ func newSchedulerMetricsMonitoring() *schedulerMetricsMonitoring {
 			"scheduler/queuing_size",
 			"Total requests in queue",
 			stats.UnitBytes),
+		serviceTimeResponseTimeRatio: stats.Float64(
+			"scheduler/service_time_response_time_ratio",
+			"Budget violation status",
+			stats.UnitDimensionless),
 		enabled: false,
 	}
 }
@@ -116,11 +123,12 @@ func (m *schedulerMetricsMonitoring) Init(appId string, latencyDistribution *vie
 	m.enabled = true
 
 	return view.Register(
-		diagUtils.NewMeasureView(m.queuingDelay, []tag.Key{appIDKey, KeyMethod, KeyEndpoint}, latencyDistribution),
-		diagUtils.NewMeasureView(m.serviceTime, []tag.Key{appIDKey, KeyMethod, KeyEndpoint}, latencyDistribution),
-		diagUtils.NewMeasureView(m.responseTime, []tag.Key{appIDKey, KeyMethod, KeyEndpoint}, latencyDistribution),
-		diagUtils.NewMeasureView(m.budget, []tag.Key{appIDKey, KeyMethod, KeyEndpoint}, latencyDistribution),
-		diagUtils.NewMeasureView(m.queueSize, []tag.Key{appIDKey, KeyMethod, KeyEndpoint}, latencyDistribution),
+		diagUtils.NewMeasureView(m.queuingDelay, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
+		diagUtils.NewMeasureView(m.serviceTime, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
+		diagUtils.NewMeasureView(m.responseTime, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
+		diagUtils.NewMeasureView(m.budget, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
+		diagUtils.NewMeasureView(m.queueSize, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
+		diagUtils.NewMeasureView(m.serviceTimeResponseTimeRatio, []tag.Key{appIDKey, KeyMethod, KeyBudgetViolationStatus}, view.Distribution(prometheus.LinearBuckets(0.0, 0.05, 21)...)),
 	)
 }
 
@@ -144,25 +152,35 @@ func (m *schedulerMetricsMonitoring) MonitorRequest(ctx context.Context, method 
 	if !m.IsEnabled() {
 		return
 	}
+
+	budgetViolationStatus := "false"
+	if budget > 0 && budget-queuingDelay < 0 {
+		budgetViolationStatus = "true"
+	}
+
 	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.queueSize.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint),
+		diagUtils.WithTags(m.queueSize.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
 		m.queueSize.M(queueSize))
 
 	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.queuingDelay.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint),
+		diagUtils.WithTags(m.queuingDelay.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
 		m.queuingDelay.M(queuingDelay))
 
 	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.serviceTime.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint),
+		diagUtils.WithTags(m.serviceTime.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
 		m.serviceTime.M(serviceTime))
 
 	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.budget.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint),
+		diagUtils.WithTags(m.budget.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
 		m.budget.M(budget))
 
 	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.responseTime.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint),
+		diagUtils.WithTags(m.responseTime.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
 		m.responseTime.M(responseTime))
+
+	stats.RecordWithTags(ctx,
+		diagUtils.WithTags(m.serviceTimeResponseTimeRatio.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
+		m.serviceTimeResponseTimeRatio.M(serviceTime/responseTime))
 }
 
 func key(method string, endpoint string) string {
@@ -242,11 +260,11 @@ func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 			log.Info("Fetching Budget")
 			st, err := s.stateStore.Get(s.ctx, &state.GetRequest{Key: r.RID})
 			if err != nil {
-				r.Budget += 0
+				r.Budget += 1
 			} else {
 				b, err := strconv.Atoi(string(st.Data))
 				if err != nil {
-					r.Budget += 0
+					r.Budget += 1
 				} else {
 					r.Budget += int64(b)
 				}
