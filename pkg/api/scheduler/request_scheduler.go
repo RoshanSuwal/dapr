@@ -128,7 +128,7 @@ func (m *schedulerMetricsMonitoring) Init(appId string, latencyDistribution *vie
 		diagUtils.NewMeasureView(m.responseTime, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
 		diagUtils.NewMeasureView(m.budget, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
 		diagUtils.NewMeasureView(m.queueSize, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
-		diagUtils.NewMeasureView(m.serviceTimeResponseTimeRatio, []tag.Key{appIDKey, KeyMethod, KeyBudgetViolationStatus}, view.Distribution(prometheus.LinearBuckets(0.0, 0.05, 21)...)),
+		diagUtils.NewMeasureView(m.serviceTimeResponseTimeRatio, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, view.Distribution(prometheus.LinearBuckets(0.0, 0.05, 21)...)),
 	)
 }
 

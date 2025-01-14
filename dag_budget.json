@@ -1,5 +1,17 @@
 [
   {
+    "service": "meta",
+    "endpoint": "meta_high_priority",
+    "method": "MSQ",
+    "budget": 1
+  },
+  {
+    "service": "meta",
+    "endpoint": "meta_low_priority",
+    "method": "MSQ",
+    "budget": 2
+  },
+  {
     "service": "frontend",
     "endpoint": "/reservation",
     "method": "POST",
@@ -7,7 +19,7 @@
   },
   {
     "service": "frontend",
-    "endpoint": "/save",
+    "endpoint": "save",
     "method": "GET",
     "budget": 4849
   },
@@ -22,5 +34,35 @@
     "endpoint": "/user",
     "method": "GET",
     "budget": 7795
+  },
+  {
+    "service": "frontend",
+    "endpoint": "save",
+    "method": "RPC",
+    "budget": 99999999
+  },
+  {
+    "service": "frontend",
+    "endpoint": "update",
+    "method": "RPC",
+    "budget": 999
+  },
+  {
+    "service": "frontend",
+    "endpoint": "timeline",
+    "method": "RPC",
+    "budget": 19999999
+  },
+  {
+    "service": "meta",
+    "endpoint": "meta1",
+    "method": "MSQ",
+    "budget": 10000000
+  },
+  {
+    "service": "meta",
+    "endpoint": "meta2",
+    "method": "MSQ",
+    "budget": 1000000
   }
 ]
