@@ -48,6 +48,7 @@ type ScRequest struct {
 	Service             string
 	RequestTimestamp    int64
 	Budget              int64
+	CumulativeBudget    int64 // allocated_budget + credited_budget
 	Priority            int64
 	QueuingDelay        int64
 	ServiceTime         int64
@@ -71,21 +72,24 @@ type EndpointBudget struct {
 
 // SchedulerMetrics Scheduler Monitoring
 var (
-	appIDKey                 = tag.MustNewKey("app_id")
-	KeyMethod                = tag.MustNewKey("method")
-	KeyEndpoint              = tag.MustNewKey("endpoint")
-	KeyBudgetViolationStatus = tag.MustNewKey("budget_violation_status")
+	appIDKey                           = tag.MustNewKey("app_id")
+	KeyMethod                          = tag.MustNewKey("method")
+	KeyEndpoint                        = tag.MustNewKey("endpoint")
+	KeyBudgetViolationStatus           = tag.MustNewKey("budget_violation_status")
+	KeyCumulativeBudgetViolationStatus = tag.MustNewKey("cumulative_budget_violation_status")
 )
 
 type schedulerMetricsMonitoring struct {
-	appId                        string
-	enabled                      bool
-	queuingDelay                 *stats.Float64Measure
-	serviceTime                  *stats.Float64Measure
-	responseTime                 *stats.Float64Measure
-	queueSize                    *stats.Int64Measure
-	budget                       *stats.Float64Measure
-	serviceTimeResponseTimeRatio *stats.Float64Measure // service_time / response_time
+	appId                         string
+	enabled                       bool
+	queuingDelay                  *stats.Float64Measure
+	serviceTime                   *stats.Float64Measure
+	responseTime                  *stats.Float64Measure
+	queueSize                     *stats.Int64Measure
+	budget                        *stats.Float64Measure
+	serviceTimeResponseTimeRatio  *stats.Float64Measure // service_time / response_time
+	queuingDelayResponseTimeRatio *stats.Float64Measure // queuing_delay / response_time
+	cumulativeBudget              *stats.Float64Measure
 }
 
 func newSchedulerMetricsMonitoring() *schedulerMetricsMonitoring {
@@ -114,6 +118,14 @@ func newSchedulerMetricsMonitoring() *schedulerMetricsMonitoring {
 			"scheduler/service_time_response_time_ratio",
 			"Budget violation status",
 			stats.UnitDimensionless),
+		queuingDelayResponseTimeRatio: stats.Float64(
+			"scheduler/queuing_delay_response_time_ratio",
+			"Budget violation status",
+			stats.UnitDimensionless),
+		cumulativeBudget: stats.Float64(
+			"scheduler/cumulative_budget",
+			"cumulative budget per request",
+			stats.UnitMilliseconds),
 		enabled: false,
 	}
 }
@@ -126,9 +138,11 @@ func (m *schedulerMetricsMonitoring) Init(appId string, latencyDistribution *vie
 		diagUtils.NewMeasureView(m.queuingDelay, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
 		diagUtils.NewMeasureView(m.serviceTime, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
 		diagUtils.NewMeasureView(m.responseTime, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
-		diagUtils.NewMeasureView(m.budget, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
+		diagUtils.NewMeasureView(m.budget, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus, KeyCumulativeBudgetViolationStatus}, latencyDistribution),
+		diagUtils.NewMeasureView(m.cumulativeBudget, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus, KeyCumulativeBudgetViolationStatus}, latencyDistribution),
 		diagUtils.NewMeasureView(m.queueSize, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
 		diagUtils.NewMeasureView(m.serviceTimeResponseTimeRatio, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, view.Distribution(prometheus.LinearBuckets(0.0, 0.05, 21)...)),
+		diagUtils.NewMeasureView(m.queuingDelayResponseTimeRatio, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, view.Distribution(prometheus.LinearBuckets(0.0, 0.05, 21)...)),
 	)
 }
 
@@ -144,18 +158,25 @@ func (m *schedulerMetricsMonitoring) MonitorRequestDataFromScRequest(ctx context
 		float64((r.QueuingDelay+r.ServiceTime)/1000),
 		int64(r.QueueSize),
 		float64(r.Budget/1000),
+		float64(r.CumulativeBudget/1000),
 	)
 }
 
 // MonitorRequest All time unit must be in milliseconds
-func (m *schedulerMetricsMonitoring) MonitorRequest(ctx context.Context, method string, endpoint string, queuingDelay float64, serviceTime float64, responseTime float64, queueSize int64, budget float64) {
+func (m *schedulerMetricsMonitoring) MonitorRequest(ctx context.Context, method string, endpoint string, queuingDelay float64, serviceTime float64, responseTime float64, queueSize int64, budget float64, cumulativeBudget float64) {
 	if !m.IsEnabled() {
 		return
 	}
 
 	budgetViolationStatus := "false"
+	cumulativeBudgetViolationStatus := "false"
+
 	if budget > 0 && budget-queuingDelay < 0 {
 		budgetViolationStatus = "true"
+	}
+
+	if cumulativeBudget-queuingDelay < 0 {
+		cumulativeBudgetViolationStatus = "true"
 	}
 
 	stats.RecordWithTags(ctx,
@@ -171,8 +192,12 @@ func (m *schedulerMetricsMonitoring) MonitorRequest(ctx context.Context, method 
 		m.serviceTime.M(serviceTime))
 
 	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.budget.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
+		diagUtils.WithTags(m.budget.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus, KeyCumulativeBudgetViolationStatus, cumulativeBudgetViolationStatus),
 		m.budget.M(budget))
+
+	stats.RecordWithTags(ctx,
+		diagUtils.WithTags(m.cumulativeBudget.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus, KeyCumulativeBudgetViolationStatus, cumulativeBudgetViolationStatus),
+		m.cumulativeBudget.M(budget))
 
 	stats.RecordWithTags(ctx,
 		diagUtils.WithTags(m.responseTime.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
@@ -180,6 +205,10 @@ func (m *schedulerMetricsMonitoring) MonitorRequest(ctx context.Context, method 
 
 	stats.RecordWithTags(ctx,
 		diagUtils.WithTags(m.serviceTimeResponseTimeRatio.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
+		m.serviceTimeResponseTimeRatio.M(serviceTime/responseTime))
+
+	stats.RecordWithTags(ctx,
+		diagUtils.WithTags(m.queuingDelayResponseTimeRatio.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, queuingDelay/responseTime),
 		m.serviceTimeResponseTimeRatio.M(serviceTime/responseTime))
 }
 
@@ -226,7 +255,7 @@ func (s *RequestScheduler) downstream() {
 		case <-s.ScWorkerChan:
 			r := s.policy.Dequeue().(*ScRequest)
 			r.QueuingDelay = time.Now().UnixMicro() - r.RequestTimestamp
-			r.RemainingBudget = r.Budget - r.QueuingDelay
+			r.RemainingBudget = r.CumulativeBudget - r.QueuingDelay
 			log.Info("[Dispatching request]", r.RID)
 			r.ServiceSig <- struct{}{}
 			s.updateBudget(r)
@@ -246,6 +275,7 @@ func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 	if s.policy.Name() == "fifo" {
 		r.Budget = 0
 		r.Priority = 0
+		r.CumulativeBudget = 0
 		return
 	} else if s.policy.Name() == "edf" {
 		// TODO: fetch budget from budget server
@@ -255,23 +285,24 @@ func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 		} else {
 			r.Budget = s.defaultBudget
 		}
+		r.CumulativeBudget = r.Budget
 
-		if s.EnableBudgetTransfer && s.activeWorkers >= s.totalWorkers {
+		if s.EnableBudgetTransfer { // s.EnableBudgetTransfer && s.activeWorkers >= s.totalWorkers // need to compute the credited budget
 			log.Info("Fetching Budget")
 			st, err := s.stateStore.Get(s.ctx, &state.GetRequest{Key: r.RID})
 			if err != nil {
-				r.Budget += 1
+				r.CumulativeBudget += 1
 			} else {
 				b, err := strconv.Atoi(string(st.Data))
 				if err != nil {
-					r.Budget += 1
+					r.CumulativeBudget += 1
 				} else {
-					r.Budget += int64(b)
+					r.CumulativeBudget += int64(b)
 				}
 			}
 		}
 
-		r.Priority = r.RequestTimestamp + r.Budget
+		r.Priority = r.RequestTimestamp + r.CumulativeBudget
 		return
 	} else if s.policy.Name() == "rat" { // request arrival time
 		st, err := s.stateStore.Get(s.ctx, &state.GetRequest{Key: r.RID})
@@ -288,6 +319,7 @@ func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 				r.Priority = int64(b)
 			}
 		}
+		r.CumulativeBudget = r.Budget
 	} else if s.policy.Name() == "pq" { // priority queue
 		if endpointBudget, ok := s.budgets[key(r.Method, r.Endpoint)]; ok {
 			//fmt.Printf("Returning from endpoint budget map!!\n")
@@ -310,13 +342,14 @@ func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 		}
 		//}
 		r.Priority = r.RequestTimestamp + r.Budget*10000000000000000 // 1730839889875183
+		r.CumulativeBudget = r.Budget
 	}
 	return
 }
 
 func (s *RequestScheduler) updateBudget(r *ScRequest) {
 	if s.policy.Name() == "edf" {
-		if r.RemainingBudget > 0 && s.EnableBudgetTransfer {
+		if s.EnableBudgetTransfer { // r.RemainingBudget > 0 && s.EnableBudgetTransfer // allowing to transfer negative budget too
 			log.Info("Transferring budget")
 			//	TODO: update budget to budget server
 			err := s.stateStore.Set(s.ctx, &state.SetRequest{Key: r.RID,
@@ -370,18 +403,19 @@ func (s *RequestScheduler) RegisterWorker() {
 
 func (s *RequestScheduler) LogMetrics(r *ScRequest) {
 	s.Logger.WithFields(map[string]any{
-		"method":           r.Method,
-		"endpoint":         r.Endpoint,
-		"queuing_delay":    r.QueuingDelay,
-		"service_time":     r.ServiceTime,
-		"budget":           r.Budget,
-		"remaining_budget": r.RemainingBudget,
-		"RID":              r.RID,
-		"response_time":    r.ServiceTime + r.QueuingDelay,
-		"service":          r.Service,
-		"priority":         r.Priority,
-		"arrival_time":     r.RequestTimestamp,
-		"queue_size":       r.QueueSize,
+		"method":            r.Method,
+		"endpoint":          r.Endpoint,
+		"queuing_delay":     r.QueuingDelay,
+		"service_time":      r.ServiceTime,
+		"budget":            r.Budget,
+		"cumulative_budget": r.CumulativeBudget,
+		"remaining_budget":  r.RemainingBudget,
+		"RID":               r.RID,
+		"response_time":     r.ServiceTime + r.QueuingDelay,
+		"service":           r.Service,
+		"priority":          r.Priority,
+		"arrival_time":      r.RequestTimestamp,
+		"queue_size":        r.QueueSize,
 	}).Info("request.scheduler")
 }
 
