@@ -180,7 +180,8 @@ func (g *Channel) invokerMethodV1WithScheduler(ctx context.Context, req *invokev
 		<-scRequest.ServiceSig
 		defer close(scRequest.ServiceSig)
 
-		response, err := g.invokeMethodV1(ctx, req)
+		//response, err := g.invokeMethodV1(ctx, req)
+		response, err := g.requestScheduler.InvokeMethodFn(ctx, req)
 		scRequest.ServiceTime = time.Now().UnixMicro() - scRequest.RequestTimestamp - scRequest.QueuingDelay
 		// Add register worker back to pool to server next request in Request Scheduler
 		g.requestScheduler.RegisterWorker()
@@ -208,6 +209,10 @@ func (g *Channel) invokerMethodV1WithScheduler(ctx context.Context, req *invokev
 	} else {
 		return g.invokeMethodV1(ctx, req)
 	}
+}
+
+func (g *Channel) InvokeFunctionForScheduler(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error) {
+	return g.invokeMethodV1(ctx, req)
 }
 
 // invokeMethodV1 calls user applications using daprclient v1.

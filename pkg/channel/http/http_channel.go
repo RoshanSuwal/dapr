@@ -317,6 +317,10 @@ func (h *Channel) SetRequestScheduler(sc *requestScheduler.RequestScheduler) {
 	h.requestScheduler = sc
 }
 
+func (h *Channel) InvokeFunctionForScheduler(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error) {
+	return h.invokeMethodV1(ctx, req, targetAppID)
+}
+
 // HealthProbe performs a health probe.
 func (h *Channel) HealthProbe(ctx context.Context) (bool, error) {
 	channelReq, err := http.NewRequestWithContext(ctx, http.MethodGet, h.baseAddress+h.appHealthCheckPath, nil)

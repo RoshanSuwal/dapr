@@ -638,8 +638,10 @@ func (a *DaprRuntime) initRuntime(ctx context.Context) error {
 	log.Info("Starting the request scheduler!!!")
 	a.channels.AppChannel().SetRequestScheduler(a.requestScheduler)
 	// setting request scheduler to schedule Request at Message Queue
-	a.processor.Subscriber().SetRequestScheduler(a.requestScheduler)
+	//a.processor.Subscriber().SetRequestScheduler(a.requestScheduler)
 
+	a.requestScheduler.SetRemoteInvokeFn(a.directMessaging.InvokeFunctionForScheduler)
+	a.requestScheduler.SetLocalInvokeFn(a.channels.AppChannel().InvokeFunctionForScheduler)
 	a.requestScheduler.Run()
 
 	a.runtimeConfig.outboundHealthz.AddTarget().Ready()
@@ -871,6 +873,7 @@ func (a *DaprRuntime) populateSecretsConfiguration() {
 func (a *DaprRuntime) initRequestScheduler() {
 	log.Info("Initializing Request scheduler")
 	a.requestScheduler = requestScheduler.NewRequestSchedulerFromConfig(a.runtimeConfig.GrpcRequestSchedulerOpts)
+	a.requestScheduler.SetAppId(a.runtimeConfig.id)
 	// TODO : Initializing Scheduler metric Monitoring
 	log.Info("Initializing Request Scheduler Monitoring")
 	if a.requestScheduler.EnableScheduling {

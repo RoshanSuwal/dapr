@@ -131,6 +131,11 @@ func LoadOptForRequestScheduler(fs *pflag.FlagSet, opts *Options) {
 	fs.BoolVar(&opts.GrpcRequestSchedulerOpts.EnableLogging, "grpc_scheduler_enable_logging", false, "Enable Grpc Scheduler Metrics Logging")
 	fs.IntVar(&opts.GrpcRequestSchedulerOpts.LoggingInterval, "grpc_scheduler_logging_interval", 10, "Logging interval for grpc Request Scheduler")
 
+	fs.BoolVar(&opts.GrpcRequestSchedulerOpts.EnableScaling, "grpc_scheduler_enable_scaling", false, "Enable scaling of the service")
+	fs.StringVar(&opts.GrpcRequestSchedulerOpts.ScalingServerAddress, "grpc_scheduler_scaling_server_address", "localhost", "Host Address of scaling Server")
+	fs.IntVar(&opts.GrpcRequestSchedulerOpts.ScalingServerPort, "grpc_scheduler_scaling_server_port", 5005, "port of scaling Server")
+	fs.StringVar(&opts.GrpcRequestSchedulerOpts.TargetAppId, "grpc_scheduler_target_app_id", "", "Target App Id to divert traffic from scheduler")
+
 }
 
 func New(origArgs []string) (*Options, error) {

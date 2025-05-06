@@ -6,12 +6,8 @@ import (
 	"github.com/dapr/components-contrib/metadata"
 	"github.com/dapr/components-contrib/state"
 	"github.com/dapr/components-contrib/state/redis"
-	diagUtils "github.com/dapr/dapr/pkg/diagnostics/utils"
+	invokev1 "github.com/dapr/dapr/pkg/messaging/v1"
 	"github.com/dapr/kit/logger"
-	"github.com/prometheus/client_golang/prometheus"
-	"go.opencensus.io/stats"
-	"go.opencensus.io/stats/view"
-	"go.opencensus.io/tag"
 	"go.uber.org/zap"
 	"os"
 	"runtime"
@@ -40,6 +36,11 @@ type RequestSchedulerOpts struct {
 
 	EnableLogging   bool
 	LoggingInterval int
+
+	EnableScaling        bool
+	ScalingServerAddress string
+	ScalingServerPort    int
+	TargetAppId          string
 }
 
 type ScRequest struct {
@@ -70,148 +71,6 @@ type EndpointBudget struct {
 	Budget   int64  `json:"budget"`
 }
 
-// SchedulerMetrics Scheduler Monitoring
-var (
-	appIDKey                           = tag.MustNewKey("app_id")
-	KeyMethod                          = tag.MustNewKey("method")
-	KeyEndpoint                        = tag.MustNewKey("endpoint")
-	KeyBudgetViolationStatus           = tag.MustNewKey("budget_violation_status")
-	KeyCumulativeBudgetViolationStatus = tag.MustNewKey("cumulative_budget_violation_status")
-)
-
-type schedulerMetricsMonitoring struct {
-	appId                         string
-	enabled                       bool
-	queuingDelay                  *stats.Float64Measure
-	serviceTime                   *stats.Float64Measure
-	responseTime                  *stats.Float64Measure
-	queueSize                     *stats.Int64Measure
-	budget                        *stats.Float64Measure
-	serviceTimeResponseTimeRatio  *stats.Float64Measure // service_time / response_time
-	queuingDelayResponseTimeRatio *stats.Float64Measure // queuing_delay / response_time
-	cumulativeBudget              *stats.Float64Measure
-}
-
-func newSchedulerMetricsMonitoring() *schedulerMetricsMonitoring {
-	return &schedulerMetricsMonitoring{
-		queuingDelay: stats.Float64(
-			"scheduler/queuing_delay",
-			"Queuing delay per request",
-			stats.UnitMilliseconds),
-		serviceTime: stats.Float64(
-			"scheduler/service_time",
-			"service time per request",
-			stats.UnitMilliseconds),
-		responseTime: stats.Float64(
-			"scheduler/response_time",
-			"response time per request",
-			stats.UnitMilliseconds),
-		budget: stats.Float64(
-			"scheduler/budget",
-			"budget per request",
-			stats.UnitMilliseconds),
-		queueSize: stats.Int64(
-			"scheduler/queuing_size",
-			"Total requests in queue",
-			stats.UnitBytes),
-		serviceTimeResponseTimeRatio: stats.Float64(
-			"scheduler/service_time_response_time_ratio",
-			"Budget violation status",
-			stats.UnitDimensionless),
-		queuingDelayResponseTimeRatio: stats.Float64(
-			"scheduler/queuing_delay_response_time_ratio",
-			"Budget violation status",
-			stats.UnitDimensionless),
-		cumulativeBudget: stats.Float64(
-			"scheduler/cumulative_budget",
-			"cumulative budget per request",
-			stats.UnitMilliseconds),
-		enabled: false,
-	}
-}
-
-func (m *schedulerMetricsMonitoring) Init(appId string, latencyDistribution *view.Aggregation) error {
-	m.appId = appId
-	m.enabled = true
-
-	return view.Register(
-		diagUtils.NewMeasureView(m.queuingDelay, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
-		diagUtils.NewMeasureView(m.serviceTime, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
-		diagUtils.NewMeasureView(m.responseTime, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
-		diagUtils.NewMeasureView(m.budget, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus, KeyCumulativeBudgetViolationStatus}, latencyDistribution),
-		diagUtils.NewMeasureView(m.cumulativeBudget, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus, KeyCumulativeBudgetViolationStatus}, latencyDistribution),
-		diagUtils.NewMeasureView(m.queueSize, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, latencyDistribution),
-		diagUtils.NewMeasureView(m.serviceTimeResponseTimeRatio, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, view.Distribution(prometheus.LinearBuckets(0.0, 0.05, 21)...)),
-		diagUtils.NewMeasureView(m.queuingDelayResponseTimeRatio, []tag.Key{appIDKey, KeyMethod, KeyEndpoint, KeyBudgetViolationStatus}, view.Distribution(prometheus.LinearBuckets(0.0, 0.05, 21)...)),
-	)
-}
-
-func (m *schedulerMetricsMonitoring) IsEnabled() bool {
-	return m != nil && m.enabled
-}
-
-func (m *schedulerMetricsMonitoring) MonitorRequestDataFromScRequest(ctx context.Context, r *ScRequest) {
-	m.MonitorRequest(
-		ctx, r.Method, r.Endpoint,
-		float64(r.QueuingDelay/1000),
-		float64(r.ServiceTime/1000),
-		float64((r.QueuingDelay+r.ServiceTime)/1000),
-		int64(r.QueueSize),
-		float64(r.Budget/1000),
-		float64(r.CumulativeBudget/1000),
-	)
-}
-
-// MonitorRequest All time unit must be in milliseconds
-func (m *schedulerMetricsMonitoring) MonitorRequest(ctx context.Context, method string, endpoint string, queuingDelay float64, serviceTime float64, responseTime float64, queueSize int64, budget float64, cumulativeBudget float64) {
-	if !m.IsEnabled() {
-		return
-	}
-
-	budgetViolationStatus := "false"
-	cumulativeBudgetViolationStatus := "false"
-
-	if budget > 0 && budget-queuingDelay < 0 {
-		budgetViolationStatus = "true"
-	}
-
-	if cumulativeBudget-queuingDelay < 0 {
-		cumulativeBudgetViolationStatus = "true"
-	}
-
-	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.queueSize.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
-		m.queueSize.M(queueSize))
-
-	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.queuingDelay.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
-		m.queuingDelay.M(queuingDelay))
-
-	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.serviceTime.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
-		m.serviceTime.M(serviceTime))
-
-	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.budget.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus, KeyCumulativeBudgetViolationStatus, cumulativeBudgetViolationStatus),
-		m.budget.M(budget))
-
-	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.cumulativeBudget.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus, KeyCumulativeBudgetViolationStatus, cumulativeBudgetViolationStatus),
-		m.cumulativeBudget.M(budget))
-
-	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.responseTime.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
-		m.responseTime.M(responseTime))
-
-	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.serviceTimeResponseTimeRatio.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, budgetViolationStatus),
-		m.serviceTimeResponseTimeRatio.M(serviceTime/responseTime))
-
-	stats.RecordWithTags(ctx,
-		diagUtils.WithTags(m.queuingDelayResponseTimeRatio.Name(), appIDKey, m.appId, KeyMethod, method, KeyEndpoint, endpoint, KeyBudgetViolationStatus, queuingDelay/responseTime),
-		m.serviceTimeResponseTimeRatio.M(serviceTime/responseTime))
-}
-
 func key(method string, endpoint string) string {
 	return method + " " + endpoint
 }
@@ -220,23 +79,124 @@ var _logger = logger.NewLogger("dapr.runtime.request_scheduler.metrics")
 var log = logger.NewLogger("dapr.runtime.request_scheduler.info")
 
 type RequestScheduler struct {
-	policy                    SchedulingPolicy
-	ScRequestChan             chan *ScRequest
-	ScWorkerChan              chan struct{}
-	activeWorkers             int64
-	totalWorkers              int64
-	Logger                    logger.Logger
-	stateStore                state.Store
-	ctx                       context.Context
-	EnableScheduling          bool
-	enableLogging             bool
-	loggingInterval           int
-	defaultBudget             int64
-	budgetTTL                 int
-	EnableBudgetTransfer      bool
-	budgetPath                string
-	budgets                   map[string]EndpointBudget
-	SchedulerMetricMonitoring *schedulerMetricsMonitoring
+	appId                      string
+	policy                     SchedulingPolicy
+	ScRequestChan              chan *ScRequest
+	ScWorkerChan               chan struct{}
+	activeWorkers              int64
+	totalWorkers               int64
+	Logger                     logger.Logger
+	stateStore                 state.Store
+	ctx                        context.Context
+	EnableScheduling           bool
+	enableLogging              bool
+	loggingInterval            int
+	defaultBudget              int64
+	budgetTTL                  int
+	EnableBudgetTransfer       bool
+	budgetPath                 string
+	budgets                    map[string]EndpointBudget
+	SchedulerMetricMonitoring  *schedulerMetricsMonitoring
+	scalingMetricsMonitoring   *ScalingMetricsMonitoring
+	scalingMetricReportSigChan chan struct{}
+	scalingConfiguration       ScalingConfiguration
+	enableScaling              bool
+	TargetAppId                string
+
+	remoteInvokeFn func(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)
+	localInvokeFn  func(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)
+}
+
+func (s *RequestScheduler) SetRemoteInvokeFn(remoteInvokeFn func(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)) {
+	s.remoteInvokeFn = remoteInvokeFn
+}
+
+func (s *RequestScheduler) SetLocalInvokeFn(localInvokeFn func(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)) {
+	s.localInvokeFn = localInvokeFn
+}
+
+func (s *RequestScheduler) InvokeMethodFn(ctx context.Context, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error) {
+	if s.TargetAppId == "" || s.TargetAppId == s.appId {
+		return s.localInvokeFn(ctx, s.TargetAppId, req)
+	}
+	return s.remoteInvokeFn(ctx, s.TargetAppId, req)
+}
+
+func (s *RequestScheduler) SetEnableScaling(enableScaling bool) {
+	s.enableScaling = enableScaling
+}
+
+func (s *RequestScheduler) SetScalingMetricsMonitoring(scalingMetricsMonitoring *ScalingMetricsMonitoring) {
+	s.scalingMetricsMonitoring = scalingMetricsMonitoring
+	s.scalingMetricReportSigChan = make(chan struct{}, 1)
+}
+
+func (s *RequestScheduler) SetScalingConfiguration(scalingConfiguration ScalingConfiguration) {
+	s.scalingConfiguration = scalingConfiguration
+}
+
+func (s *RequestScheduler) SetAppId(appId string) {
+	s.appId = appId
+	if s.enableScaling {
+		s.scalingMetricsMonitoring.SetAppId(appId)
+	}
+}
+
+func (s *RequestScheduler) reportToScalingMetricMonitoring(r *ScRequest) {
+	s.scalingMetricsMonitoring.addMetric(r.Endpoint, r.CumulativeBudget, r.Budget, r.QueuingDelay, r.RequestTimestamp)
+	// check if violation exceeds threshold or not
+	if s.scalingMetricsMonitoring.checkBudgetViolation(s.scalingConfiguration) {
+		select {
+		case s.scalingMetricReportSigChan <- struct{}{}:
+		default:
+			log.Warn("Skipping scaling metric report signal: channel full")
+		}
+	}
+}
+
+func (s *RequestScheduler) scaling() {
+	// contains logic to sync the scheduler configuration from bsd auto scalar
+	// reports the budget_violation metrics to auto scalar
+	// continuously send the health or sync request to auto scalar
+	secondTicker := time.NewTicker(time.Second)
+	defer secondTicker.Stop()
+	secondTickerCounter := int64(0)
+	for {
+		select {
+		case <-s.scalingMetricReportSigChan: // send budget violation channel
+			log.Debug("Reporting to scalar")
+			scalingReportResponse, err := s.scalingMetricsMonitoring.SendReportToScalar(s.ctx)
+			if err != nil {
+				log.Errorf(err.Error())
+				continue
+			}
+
+			s.scalingConfiguration.MaxConcurrencyPerReplica = scalingReportResponse.MaxConcurrencyPerReplica
+			s.scalingConfiguration.Replica = scalingReportResponse.Replica
+			s.scalingConfiguration.ScalingCheckIntervalInSeconds = scalingReportResponse.ScalingCheckIntervalInSeconds
+			s.scalingConfiguration.AllocatedBudgetViolationThreshold = scalingReportResponse.AllocatedBudgetViolationThreshold
+			s.scalingConfiguration.CumulativeBudgetViolationThreshold = scalingReportResponse.CumulativeBudgetViolationThreshold
+
+			s.scalingMetricsMonitoring.SetWindowPeriodInSec(scalingReportResponse.ScalingMetricWindowPeriodInSeconds)
+
+			if s.scalingConfiguration.Replica*s.scalingConfiguration.MaxConcurrencyPerReplica != s.totalWorkers {
+				s.UpdateWorkers(s.scalingConfiguration.Replica * s.scalingConfiguration.MaxConcurrencyPerReplica)
+			}
+
+		case t := <-secondTicker.C:
+			log.Debug("Scaling Second Ticker :", t.String(), " - counter : ", secondTickerCounter)
+			secondTickerCounter += 1
+			s.scalingMetricsMonitoring.computeNewArrivalRate()
+			if secondTickerCounter%s.scalingConfiguration.ScalingCheckIntervalInSeconds == 0 {
+				// send signal to send scalingMetric to auto scalar
+				select {
+				case s.scalingMetricReportSigChan <- struct{}{}:
+				default:
+					log.Warn("Skipping scaling metric report signal: channel full")
+				}
+			}
+		}
+	}
 }
 
 func (s *RequestScheduler) upstream() {
@@ -260,6 +220,9 @@ func (s *RequestScheduler) downstream() {
 			r.ServiceSig <- struct{}{}
 			s.updateBudget(r)
 			s.updateActiveWorkers(1)
+			if s.enableScaling {
+				s.reportToScalingMetricMonitoring(r)
+			}
 		}
 	}
 }
@@ -270,7 +233,7 @@ func (s *RequestScheduler) updateActiveWorkers(n int64) {
 
 func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 	//Add the static budget if any first
-	// If activeWorker < totalWorkers, then no need to fetch budget from budget server,
+	// activeWorker < totalWorkers, then no need to fetch budget from budget server,
 	// Just allocate budget to 0 as no budget is going to be used for this request
 	if s.policy.Name() == "fifo" {
 		r.Budget = 0
@@ -420,6 +383,7 @@ func (s *RequestScheduler) LogMetrics(r *ScRequest) {
 }
 
 func (s *RequestScheduler) UpdateWorkers(allocateWorkers int64) {
+	log.WithFields(map[string]any{"from": s.totalWorkers, "to": allocateWorkers}).Info("Updating Dispatcher Workers")
 	for s.totalWorkers < allocateWorkers {
 		s.ScWorkerChan <- struct{}{}
 		s.totalWorkers++
@@ -475,6 +439,9 @@ func (s *RequestScheduler) Run() {
 			"budgetPath":           s.budgetPath,
 			"enableBudgetTransfer": s.EnableBudgetTransfer,
 			"budgetTTL":            s.budgetTTL,
+			"enableScaling":        s.enableScaling,
+			"TargetAppID":          s.TargetAppId,
+			"AppId":                s.appId,
 		}).
 		Info("Running Request scheduler")
 
@@ -493,7 +460,7 @@ func (s *RequestScheduler) Run() {
 		go func() {
 			ticker := time.NewTicker(time.Duration(s.loggingInterval) * time.Second)
 			defer ticker.Stop()
-			for _ = range ticker.C {
+			for range ticker.C {
 				log.WithFields(map[string]any{
 					"total_workers":   s.totalWorkers,
 					"active_workers":  s.activeWorkers,
@@ -503,6 +470,10 @@ func (s *RequestScheduler) Run() {
 		}()
 	}
 
+	if s.enableScaling {
+		log.Info("Starting the scheduler Scaling")
+		go s.scaling()
+	}
 }
 
 func newRequestScheduler(policy SchedulingPolicy, maxWorkers int64, requestChannelSize int64, logger logger.Logger, store state.Store, ctx context.Context, enableScheduling bool, enableLogging bool, loggingInterval int, defaultBudget int64, budgetPath string, enableBudgetTransfer bool, budgetTTL int) *RequestScheduler {
@@ -524,6 +495,7 @@ func newRequestScheduler(policy SchedulingPolicy, maxWorkers int64, requestChann
 		EnableBudgetTransfer:      enableBudgetTransfer,
 		budgetTTL:                 budgetTTL,
 		SchedulerMetricMonitoring: newSchedulerMetricsMonitoring(),
+		enableScaling:             false,
 	}
 }
 
@@ -560,6 +532,30 @@ func NewRequestSchedulerFromConfig(opts RequestSchedulerOpts) *RequestScheduler 
 		opts.EnableBudgetTransfer,
 		opts.BudgetTTL,
 	)
+
+	scheduler.TargetAppId = opts.TargetAppId
+	scheduler.SetEnableScaling(opts.EnableScaling)
+
+	if opts.EnableScaling {
+		// create connection
+		log.Info("Enabled ScalingMetric Reporting For Scheduler")
+		conn, err := CreateGrpcConnection(ctx, opts.ScalingServerAddress, opts.ScalingServerPort)
+		if err != nil {
+			log.Error("Failed to connect to Scaling Server Running at %s:%d with error : %s", opts.ScalingServerAddress, opts.ScalingServerPort, err.Error())
+		}
+
+		scheduler.SetScalingMetricsMonitoring(NewScalingMetricsMonitoring(1000, conn))
+
+		scheduler.SetScalingConfiguration(ScalingConfiguration{
+			ScalingCheckIntervalInSeconds:      1,
+			MaxConcurrencyPerReplica:           int64(opts.Worker),
+			Replica:                            1,
+			ArrivalRateThresholdPerReplica:     1,
+			AllocatedBudgetViolationThreshold:  1,
+			CumulativeBudgetViolationThreshold: 1,
+		})
+	}
+
 	scheduler.UpdateWorkers(int64(opts.Worker))
 	return scheduler
 }

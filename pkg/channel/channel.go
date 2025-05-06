@@ -35,6 +35,7 @@ type AppChannel interface {
 	SetAppHealth(ah *apphealth.AppHealth)
 	TriggerJob(ctx context.Context, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)
 	SetRequestScheduler(sc *requestScheduler.RequestScheduler)
+	InvokeFunctionForScheduler(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)
 }
 
 // HTTPEndpointAppChannel is an abstraction over communications with http endpoint resources.

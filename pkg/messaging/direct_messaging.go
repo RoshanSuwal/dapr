@@ -19,7 +19,6 @@ import (
 	"fmt"
 	requestScheduler "github.com/dapr/dapr/pkg/api/scheduler"
 	"github.com/google/uuid"
-	"google.golang.org/grpc/metadata"
 	"io"
 	"os"
 	"strings"
@@ -177,16 +176,29 @@ func (d *directMessaging) Invoke(ctx context.Context, targetAppID string, req *i
 	return d.invokeWithRetry(ctx, retry.DefaultLinearRetryCount, retry.DefaultLinearBackoffInterval, app, d.invokeRemote, req)
 }
 
+func (d *directMessaging) InvokeFunctionForScheduler(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error) {
+	app, err := d.getRemoteApp(targetAppID)
+	if err != nil {
+		return nil, err
+	}
+
+	// invoke external calls first if appID matches an httpEndpoint.Name or app.id == baseURL that is overwritten
+	if d.isHTTPEndpoint(app.id) || strings.HasPrefix(app.id, "http://") || strings.HasPrefix(app.id, "https://") {
+		return d.invokeWithRetry(ctx, retry.DefaultLinearRetryCount, retry.DefaultLinearBackoffInterval, app, d.invokeHTTPEndpoint, req)
+	}
+
+	// TODO : implement scheduling logic
+	if app.id == d.appID && app.namespace == d.namespace {
+		return d.invokeLocal(ctx, req)
+		//return d.invokeWithScheduler(ctx, targetAppID, req)
+	}
+	log.Info(fmt.Sprintf("Scheduler Transferring request from %s -> %s", d.appID, targetAppID))
+	return d.invokeWithRetry(ctx, retry.DefaultLinearRetryCount, retry.DefaultLinearBackoffInterval, app, d.invokeRemote, req)
+}
+
 func (d *directMessaging) invokeWithScheduler(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error) {
-
+	log.Info("Scheduler From DirectMessaging")
 	if d.requestScheduler.EnableScheduling {
-		md, ok := metadata.FromIncomingContext(ctx)
-		if !ok {
-			md = metadata.New(nil)
-			d.requestScheduler.Logger.Error(fmt.Errorf("failed to get metadata from context"), ok)
-		}
-
-		//d.requestScheduler.Logger.Info("request: %v", req.Metadata())
 
 		scRequest := &requestScheduler.ScRequest{
 			Endpoint:         req.Message().Method,
@@ -194,46 +206,47 @@ func (d *directMessaging) invokeWithScheduler(ctx context.Context, targetAppID s
 			RequestTimestamp: time.Now().UnixNano() / 1e3,
 			ServiceSig:       make(chan struct{}),
 			Budget:           0,
-			Service:          d.appID,
+			Priority:         0,
 			//RID:              md.Get("dapr-rid")[0],s
 		}
 
-		if rids := md.Get("dapr-rid"); len(rids) > 0 {
-			scRequest.RID = rids[0]
+		md := req.Metadata()
+		if rids, ok := md["dapr-rid"]; ok {
+			scRequest.RID = rids.GetValues()[0]
+		} else if rids, ok = md["Dapr-Rid"]; ok {
+			scRequest.RID = rids.GetValues()[0]
 		} else {
 			scRequest.RID = uuid.New().String()
 			m := make(map[string][]string)
 			m["dapr-rid"] = []string{scRequest.RID}
 			req.AddMetadata(m)
 		}
-		ctx = metadata.NewOutgoingContext(ctx, md)
 
 		d.requestScheduler.RegisterRequest(scRequest)
-		// Get the request service signal and
-		// worker along with it from worker pool
 		<-scRequest.ServiceSig
 		defer close(scRequest.ServiceSig)
-
-		res, err := d.invokeLocal(ctx, req)
+		var response *invokev1.InvokeMethodResponse
+		var err error
+		if d.requestScheduler.TargetAppId == "" {
+			response, err = d.invokeLocal(ctx, req)
+		} else {
+			//	Resolve the DNS
+			app, err := d.getRemoteApp(d.requestScheduler.TargetAppId)
+			if err != nil {
+				return nil, err
+			}
+			response, err = d.invokeWithRetry(ctx, retry.DefaultLinearRetryCount, retry.DefaultLinearBackoffInterval, app, d.invokeRemote, req)
+		}
 
 		scRequest.ServiceTime = time.Now().UnixMicro() - scRequest.RequestTimestamp - scRequest.QueuingDelay
-		// Add register worker back to pool to server next request in Request Scheduler
-		d.requestScheduler.RegisterWorker()
+		// Add register worker back to pool to server
 
-		d.requestScheduler.Logger.WithFields(map[string]any{
-			"method":           scRequest.Method,
-			"endpoint":         scRequest.Endpoint,
-			"queuing_delay":    scRequest.QueuingDelay,
-			"service_time":     scRequest.ServiceTime,
-			"budget":           scRequest.Budget,
-			"remaining_budget": scRequest.RemainingBudget,
-			"RID":              scRequest.RID,
-			"response_time":    scRequest.ServiceTime + scRequest.QueuingDelay,
-			"service":          scRequest.Service,
-		}).Info("request.scheduler")
+		// log the request metric
+		d.requestScheduler.LogMetrics(scRequest)
 
-		// Return the response
-		return res, err
+		// monitoring the request metrics
+		d.requestScheduler.SchedulerMetricMonitoring.MonitorRequestDataFromScRequest(ctx, scRequest)
+		return response, err
 	} else {
 		return d.invokeLocal(ctx, req)
 	}
