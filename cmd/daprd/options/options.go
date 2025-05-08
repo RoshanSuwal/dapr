@@ -135,7 +135,7 @@ func LoadOptForRequestScheduler(fs *pflag.FlagSet, opts *Options) {
 	fs.StringVar(&opts.GrpcRequestSchedulerOpts.ScalingServerAddress, "grpc_scheduler_scaling_server_address", "localhost", "Host Address of scaling Server")
 	fs.IntVar(&opts.GrpcRequestSchedulerOpts.ScalingServerPort, "grpc_scheduler_scaling_server_port", 5005, "port of scaling Server")
 	fs.StringVar(&opts.GrpcRequestSchedulerOpts.TargetAppId, "grpc_scheduler_target_app_id", "", "Target App Id to divert traffic from scheduler")
-
+	fs.StringVar(&opts.GrpcRequestSchedulerOpts.LoadBalancingPolicy, "grpc_scheduler_load_balancing_policy", "least_connection", "Load Balancing Policy for Request Scheduler to Dispatch Request to Application")
 }
 
 func New(origArgs []string) (*Options, error) {

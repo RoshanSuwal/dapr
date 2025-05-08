@@ -15,10 +15,12 @@ package v1
 
 import (
 	"context"
+	nr "github.com/dapr/components-contrib/nameresolution"
 )
 
 // DirectMessaging is the API interface for invoking a remote app.
 type DirectMessaging interface {
 	Invoke(ctx context.Context, targetAppID string, req *InvokeMethodRequest) (*InvokeMethodResponse, error)
-	InvokeFunctionForScheduler(ctx context.Context, targetAppID string, req *InvokeMethodRequest) (*InvokeMethodResponse, error)
+	InvokeFunctionForScheduler(ctx context.Context, id string, namespace string, cacheKey string, address string, req *InvokeMethodRequest) (*InvokeMethodResponse, error)
+	GetRemoteApps(appID string) (id string, namespace string, cacheKey string, addressList nr.AddressList, err error)
 }

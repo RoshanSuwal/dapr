@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/dapr/components-contrib/metadata"
+	nr "github.com/dapr/components-contrib/nameresolution"
 	"github.com/dapr/components-contrib/state"
 	"github.com/dapr/components-contrib/state/redis"
 	invokev1 "github.com/dapr/dapr/pkg/messaging/v1"
@@ -41,6 +42,7 @@ type RequestSchedulerOpts struct {
 	ScalingServerAddress string
 	ScalingServerPort    int
 	TargetAppId          string
+	LoadBalancingPolicy  string
 }
 
 type ScRequest struct {
@@ -103,11 +105,13 @@ type RequestScheduler struct {
 	enableScaling              bool
 	TargetAppId                string
 
-	remoteInvokeFn func(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)
-	localInvokeFn  func(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)
+	remoteInvokeFn  func(ctx context.Context, id string, namespace string, cacheKey string, address string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)
+	localInvokeFn   func(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)
+	getRemoteAppsFn func(appID string) (id string, namespace string, cacheKey string, addressList nr.AddressList, err error)
+	loadBalancer    LoadBalancer
 }
 
-func (s *RequestScheduler) SetRemoteInvokeFn(remoteInvokeFn func(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)) {
+func (s *RequestScheduler) SetRemoteInvokeFn(remoteInvokeFn func(ctx context.Context, id string, namespace string, cacheKey string, address string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)) {
 	s.remoteInvokeFn = remoteInvokeFn
 }
 
@@ -115,11 +119,38 @@ func (s *RequestScheduler) SetLocalInvokeFn(localInvokeFn func(ctx context.Conte
 	s.localInvokeFn = localInvokeFn
 }
 
-func (s *RequestScheduler) InvokeMethodFn(ctx context.Context, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error) {
+func (s *RequestScheduler) SetGetRemoteAppsFn(getRemoteAppsFn func(appID string) (id string, namespace string, cacheKey string, addressList nr.AddressList, err error)) {
+	s.getRemoteAppsFn = getRemoteAppsFn
+}
+
+func (s *RequestScheduler) SetLoadBalancer(loadBalancer LoadBalancer) {
+	s.loadBalancer = loadBalancer
+}
+
+func (s *RequestScheduler) InvokeMethodFn(ctx context.Context, req *invokev1.InvokeMethodRequest) (resp *invokev1.InvokeMethodResponse, err error) {
 	if s.TargetAppId == "" || s.TargetAppId == s.appId {
 		return s.localInvokeFn(ctx, s.TargetAppId, req)
 	}
-	return s.remoteInvokeFn(ctx, s.TargetAppId, req)
+
+	// Get the list of addresses
+	id, namespace, cacheKey, addressList, err := s.getRemoteAppsFn(s.TargetAppId)
+	if err != nil {
+		return nil, err
+	}
+	// Select the address based on least connection
+	addressList = append(addressList, "localhost")
+	address := s.loadBalancer.Select(addressList)
+	// Add the localhost address to addressList as it also contains microservice of desired application
+	s.loadBalancer.UpdateActiveConnections(address, 1)
+	// select the appropriate invoke function
+	log.WithFields(map[string]any{"selected": address, "addressList": addressList}).Info("Load balancer")
+	if address == "localhost" || address == "" {
+		resp, err = s.localInvokeFn(ctx, address, req)
+	} else {
+		resp, err = s.remoteInvokeFn(ctx, id, namespace, cacheKey, address, req)
+	}
+	s.loadBalancer.UpdateActiveConnections(address, -1)
+	return resp, err
 }
 
 func (s *RequestScheduler) SetEnableScaling(enableScaling bool) {
@@ -442,6 +473,7 @@ func (s *RequestScheduler) Run() {
 			"enableScaling":        s.enableScaling,
 			"TargetAppID":          s.TargetAppId,
 			"AppId":                s.appId,
+			"LoadBalancer":         s.loadBalancer.Type(),
 		}).
 		Info("Running Request scheduler")
 
@@ -534,6 +566,7 @@ func NewRequestSchedulerFromConfig(opts RequestSchedulerOpts) *RequestScheduler 
 	)
 
 	scheduler.TargetAppId = opts.TargetAppId
+	scheduler.SetLoadBalancer(NewLoadBalancer(opts.LoadBalancingPolicy))
 	scheduler.SetEnableScaling(opts.EnableScaling)
 
 	if opts.EnableScaling {

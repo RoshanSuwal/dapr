@@ -642,6 +642,7 @@ func (a *DaprRuntime) initRuntime(ctx context.Context) error {
 
 	a.requestScheduler.SetRemoteInvokeFn(a.directMessaging.InvokeFunctionForScheduler)
 	a.requestScheduler.SetLocalInvokeFn(a.channels.AppChannel().InvokeFunctionForScheduler)
+	a.requestScheduler.SetGetRemoteAppsFn(a.directMessaging.GetRemoteApps)
 	a.requestScheduler.Run()
 
 	a.runtimeConfig.outboundHealthz.AddTarget().Ready()

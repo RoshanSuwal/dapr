@@ -176,11 +176,74 @@ func (d *directMessaging) Invoke(ctx context.Context, targetAppID string, req *i
 	return d.invokeWithRetry(ctx, retry.DefaultLinearRetryCount, retry.DefaultLinearBackoffInterval, app, d.invokeRemote, req)
 }
 
-func (d *directMessaging) InvokeFunctionForScheduler(ctx context.Context, targetAppID string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error) {
-	app, err := d.getRemoteApp(targetAppID)
+func (d *directMessaging) GetRemoteApps(appID string) (id string, namespace string, cacheKey string, addressList nr.AddressList, err error) {
+	id, namespace, err = d.requestAppIDAndNamespace(appID)
 	if err != nil {
-		return nil, err
+		return id, namespace, cacheKey, addressList, err
 	}
+
+	if d.resolver == nil {
+		return id, namespace, cacheKey, addressList, errors.New("name resolver not initialized")
+	}
+
+	// Note: check for case where URL is overwritten for external service invocation,
+	// or if current app id is associated with an http endpoint CRD.
+	// This will also forgo service discovery.
+	switch {
+	case strings.HasPrefix(id, "http://") || strings.HasPrefix(id, "https://"):
+		addressList = append(addressList, id)
+	case d.isHTTPEndpoint(id):
+		addressList = append(addressList, d.checkHTTPEndpoints(id))
+	default:
+		request := nr.ResolveRequest{
+			ID:        id,
+			Namespace: namespace,
+			Port:      d.grpcPort,
+		}
+
+		// If the component implements ResolverMulti, we can use caching
+		if d.resolverMulti != nil {
+			if d.resolverCache != nil {
+				// Check if the value is in the cache
+				cacheKey = request.CacheKey()
+				addressList, _ = d.resolverCache.Get(cacheKey)
+			}
+
+			// If there was nothing in the cache (including the case of the cache disabled)
+			if len(addressList) == 0 {
+				// Resolve
+				addressList, err = d.resolverMulti.ResolveIDMulti(context.TODO(), request)
+				if err != nil {
+					return id, namespace, cacheKey, addressList, err
+				}
+
+				if len(addressList) > 0 && cacheKey != "" {
+					// Store the result in cache
+					// Note that we may have a race condition here if another goroutine was resolving the same address
+					// This is acceptable, as the waste caused by an extra DNS resolution is very small
+					d.resolverCache.Set(cacheKey, addressList, resolverCacheTTL)
+				}
+			}
+
+		} else {
+			var address string
+			address, err = d.resolver.ResolveID(context.TODO(), request)
+			addressList = append(addressList, address)
+			if err != nil {
+				return id, namespace, cacheKey, addressList, err
+			}
+		}
+	}
+	return id, namespace, cacheKey, addressList, nil
+}
+
+func (d *directMessaging) InvokeFunctionForScheduler(ctx context.Context, id string, namespace string, cacheKey string, address string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error) {
+	//app, err := d.getRemoteApp(targetAppID)
+	//if err != nil {
+	//	return nil, err
+	//}
+
+	app := remoteApp{id: id, namespace: namespace, cacheKey: cacheKey, address: address}
 
 	// invoke external calls first if appID matches an httpEndpoint.Name or app.id == baseURL that is overwritten
 	if d.isHTTPEndpoint(app.id) || strings.HasPrefix(app.id, "http://") || strings.HasPrefix(app.id, "https://") {
@@ -192,7 +255,7 @@ func (d *directMessaging) InvokeFunctionForScheduler(ctx context.Context, target
 		return d.invokeLocal(ctx, req)
 		//return d.invokeWithScheduler(ctx, targetAppID, req)
 	}
-	log.Info(fmt.Sprintf("Scheduler Transferring request from %s -> %s", d.appID, targetAppID))
+	log.Info(fmt.Sprintf("Scheduler Transferring request from %s -> %s", d.appID, id))
 	return d.invokeWithRetry(ctx, retry.DefaultLinearRetryCount, retry.DefaultLinearBackoffInterval, app, d.invokeRemote, req)
 }
 
