@@ -43,6 +43,7 @@ type RequestSchedulerOpts struct {
 	ScalingServerPort    int
 	TargetAppId          string
 	LoadBalancingPolicy  string
+	Replica              int
 }
 
 type ScRequest struct {
@@ -128,14 +129,16 @@ func (s *RequestScheduler) SetLoadBalancer(loadBalancer LoadBalancer) {
 }
 
 func (s *RequestScheduler) InvokeMethodFn(ctx context.Context, req *invokev1.InvokeMethodRequest) (resp *invokev1.InvokeMethodResponse, err error) {
-	if s.TargetAppId == "" || s.TargetAppId == s.appId {
+	if s.TargetAppId == "" || s.TargetAppId == s.appId || s.scalingConfiguration.Replica == 1 {
 		return s.localInvokeFn(ctx, s.TargetAppId, req)
 	}
 
 	// Get the list of addresses
 	id, namespace, cacheKey, addressList, err := s.getRemoteAppsFn(s.TargetAppId)
 	if err != nil {
-		return nil, err
+		log.Warn(err.Error())
+		return s.localInvokeFn(ctx, s.TargetAppId, req)
+		//return nil, err
 	}
 	// Select the address based on least connection
 	addressList = append(addressList, "localhost")
@@ -568,6 +571,14 @@ func NewRequestSchedulerFromConfig(opts RequestSchedulerOpts) *RequestScheduler 
 	scheduler.TargetAppId = opts.TargetAppId
 	scheduler.SetLoadBalancer(NewLoadBalancer(opts.LoadBalancingPolicy))
 	scheduler.SetEnableScaling(opts.EnableScaling)
+	scheduler.SetScalingConfiguration(ScalingConfiguration{
+		ScalingCheckIntervalInSeconds:      1,
+		MaxConcurrencyPerReplica:           max(1, int64(opts.Worker)),
+		Replica:                            max(1, int64(opts.Replica)),
+		ArrivalRateThresholdPerReplica:     1,
+		AllocatedBudgetViolationThreshold:  1,
+		CumulativeBudgetViolationThreshold: 1,
+	})
 
 	if opts.EnableScaling {
 		// create connection
@@ -578,18 +589,9 @@ func NewRequestSchedulerFromConfig(opts RequestSchedulerOpts) *RequestScheduler 
 		}
 
 		scheduler.SetScalingMetricsMonitoring(NewScalingMetricsMonitoring(1000, conn))
-
-		scheduler.SetScalingConfiguration(ScalingConfiguration{
-			ScalingCheckIntervalInSeconds:      1,
-			MaxConcurrencyPerReplica:           int64(opts.Worker),
-			Replica:                            1,
-			ArrivalRateThresholdPerReplica:     1,
-			AllocatedBudgetViolationThreshold:  1,
-			CumulativeBudgetViolationThreshold: 1,
-		})
 	}
 
-	scheduler.UpdateWorkers(int64(opts.Worker))
+	scheduler.UpdateWorkers(int64(opts.Worker * opts.Replica))
 	return scheduler
 }
 

@@ -64,5 +64,24 @@
     "endpoint": "meta2",
     "method": "MSQ",
     "budget": 1000000
+  },
+
+  {
+    "service": "localhost",
+    "endpoint": "checkUser",
+    "method": "RPC",
+    "budget": 10000
+  },
+  {
+    "service": "localhost",
+    "endpoint": "validateUser",
+    "method": "RPC",
+    "budget": 30000
+  },
+  {
+    "service": "localhost",
+    "endpoint": "createUser",
+    "method": "RPC",
+    "budget": 110000
   }
 ]
