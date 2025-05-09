@@ -82,6 +82,6 @@
     "service": "localhost",
     "endpoint": "createUser",
     "method": "RPC",
-    "budget": 110000
+    "budget": 1000
   }
 ]

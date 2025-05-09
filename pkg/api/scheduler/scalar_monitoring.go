@@ -64,12 +64,12 @@ type ScalingMetricsMonitoring struct {
 	appId                               string
 	maxSize                             int
 	metricList                          *list.List
-	allocatedBudgetViolationCount       int
-	cumulativeBudgetViolationCount      int
+	allocatedBudgetViolationCount       float64
+	cumulativeBudgetViolationCount      float64
 	queuingDelaySum                     int64
 	appCallbackClient                   runtimev1pb.AppCallbackClient
-	arrivalRateCounter                  int
-	cumulativeArrivalRateInWindowPeriod int        // cumulative arrival rate in  window
+	arrivalRateCounter                  float64
+	cumulativeArrivalRateInWindowPeriod float64    // cumulative arrival rate in  window
 	arrivalRatePerSecondList            *list.List // contains the last N seconds arrival rate
 	windowPeriodInSec                   int        // window period to calculate the arrival rate mean
 	lastReportedTime                    int64
@@ -93,19 +93,19 @@ func (p *ScalingMetricsMonitoring) computeNewArrivalRate() {
 	p.cumulativeArrivalRateInWindowPeriod += p.arrivalRateCounter
 	p.arrivalRateCounter = 0
 	for p.arrivalRatePerSecondList.Len() > p.windowPeriodInSec {
-		p.cumulativeArrivalRateInWindowPeriod -= max(p.arrivalRatePerSecondList.Remove(p.arrivalRatePerSecondList.Back()).(int), 0)
+		p.cumulativeArrivalRateInWindowPeriod -= max(p.arrivalRatePerSecondList.Remove(p.arrivalRatePerSecondList.Back()).(float64), 0)
 	}
 }
 
 func (p *ScalingMetricsMonitoring) checkBudgetViolation(sc ScalingConfiguration) bool {
-	if p.metricList.Len() < (p.maxSize / 10) {
-		return false
+	if ml := p.metricList.Len(); ml > (p.maxSize / 10) {
+		return p.allocatedBudgetViolationCount/float64(ml) > sc.AllocatedBudgetViolationThreshold
 	}
-	return float64(p.allocatedBudgetViolationCount/p.metricList.Len()) > sc.AllocatedBudgetViolationThreshold
+	return false
 }
 
 func (p *ScalingMetricsMonitoring) addMetric(endpoint string, cumulativeBudget int64, allocatedBudget int64, queuingDelay int64, requestTimestamp int64) {
-	metric := p.metricList.PushBack(&ScalingParamMetric{
+	metric := p.metricList.PushFront(&ScalingParamMetric{
 		Endpoint:                  endpoint,
 		CumulativeBudgetViolation: cumulativeBudget < queuingDelay,
 		AllocatedBudgetViolation:  allocatedBudget < queuingDelay,
@@ -114,8 +114,7 @@ func (p *ScalingMetricsMonitoring) addMetric(endpoint string, cumulativeBudget i
 	}).Value.(*ScalingParamMetric)
 
 	p.arrivalRateCounter++
-	p.metricList.PushFront(metric)
-	p.queuingDelaySum += metric.QueuingDelay
+	p.queuingDelaySum = p.queuingDelaySum + metric.QueuingDelay
 
 	if metric.CumulativeBudgetViolation {
 		p.cumulativeBudgetViolationCount++
@@ -137,12 +136,14 @@ func (p *ScalingMetricsMonitoring) addMetric(endpoint string, cumulativeBudget i
 }
 
 func (p *ScalingMetricsMonitoring) GetMetricReport() *ScalingMetricsReportRequest {
+	metricsCount := float64(max(p.metricList.Len(), p.maxSize/10, 1))
 	return &ScalingMetricsReportRequest{
 		AppId:                          p.appId,
-		AllocatedBudgetViolationRatio:  float64(p.allocatedBudgetViolationCount / max(p.metricList.Len(), p.maxSize/10)),
-		CumulativeBudgetViolationRatio: float64(p.cumulativeBudgetViolationCount / max(p.metricList.Len(), p.maxSize/10)),
-		MeanQueuingDelay:               p.queuingDelaySum / int64(max(p.metricList.Len(), p.maxSize/10)),
-		ArrivalRate:                    int64(math.Ceil(float64(p.cumulativeArrivalRateInWindowPeriod / p.windowPeriodInSec))),
+		Timestamp:                      time.Now().UnixMilli(),
+		AllocatedBudgetViolationRatio:  p.allocatedBudgetViolationCount / metricsCount,
+		CumulativeBudgetViolationRatio: p.cumulativeBudgetViolationCount / metricsCount,
+		ArrivalRate:                    int64(math.Ceil(p.cumulativeArrivalRateInWindowPeriod / float64(p.windowPeriodInSec))),
+		MeanQueuingDelay:               p.queuingDelaySum / int64(metricsCount),
 	}
 }
 
@@ -163,7 +164,7 @@ func (p *ScalingMetricsMonitoring) SendReportToScalar(ctx context.Context) (scal
 	if err = json.Unmarshal(invokeResponse.Data.Value, &scalingMetricReportResponse); err != nil {
 		return nil, err
 	}
-	return
+	return scalingMetricReportResponse, nil
 }
 
 func NewScalingMetricsMonitoring(maxSize int, conn *grpc.ClientConn) *ScalingMetricsMonitoring {

@@ -3,6 +3,7 @@ package scheduler
 import (
 	nr "github.com/dapr/components-contrib/nameresolution"
 	"math"
+	"sync"
 )
 
 type LoadBalancer interface {
@@ -25,13 +26,15 @@ func (l *RoundRobinLoadBalancer) UpdateActiveConnections(address string, increme
 
 type LeastConnectionLoadBalancer struct {
 	AddressMap map[string]int
+	mu         sync.Mutex
 }
 
 func (l *LeastConnectionLoadBalancer) Type() string { return "Least Connection" }
 
 func (l *LeastConnectionLoadBalancer) Select(addressList nr.AddressList) (address string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	minConn := math.MaxInt
-
 	for i := range len(addressList) {
 		if _, ok := l.AddressMap[addressList[i]]; !ok {
 			l.AddressMap[addressList[i]] = 0
@@ -46,6 +49,8 @@ func (l *LeastConnectionLoadBalancer) Select(addressList nr.AddressList) (addres
 }
 
 func (l *LeastConnectionLoadBalancer) UpdateActiveConnections(address string, increment int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if v, ok := l.AddressMap[address]; ok {
 		l.AddressMap[address] = max(0, v+increment)
 	}

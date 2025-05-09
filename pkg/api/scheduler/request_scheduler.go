@@ -212,7 +212,7 @@ func (s *RequestScheduler) scaling() {
 			s.scalingConfiguration.CumulativeBudgetViolationThreshold = scalingReportResponse.CumulativeBudgetViolationThreshold
 
 			s.scalingMetricsMonitoring.SetWindowPeriodInSec(scalingReportResponse.ScalingMetricWindowPeriodInSeconds)
-
+			s.scalingMetricsMonitoring.SetMaxSize(scalingReportResponse.ScalingMetricListMaxSize)
 			if s.scalingConfiguration.Replica*s.scalingConfiguration.MaxConcurrencyPerReplica != s.totalWorkers {
 				s.UpdateWorkers(s.scalingConfiguration.Replica * s.scalingConfiguration.MaxConcurrencyPerReplica)
 			}
