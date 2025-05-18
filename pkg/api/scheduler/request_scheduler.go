@@ -104,6 +104,7 @@ type RequestScheduler struct {
 	scalingMetricReportSigChan chan struct{}
 	scalingConfiguration       ScalingConfiguration
 	enableScaling              bool
+	ScalingReportingChan       chan *ScRequest
 	TargetAppId                string
 
 	remoteInvokeFn  func(ctx context.Context, id string, namespace string, cacheKey string, address string, req *invokev1.InvokeMethodRequest) (*invokev1.InvokeMethodResponse, error)
@@ -147,6 +148,7 @@ func (s *RequestScheduler) InvokeMethodFn(ctx context.Context, req *invokev1.Inv
 	s.loadBalancer.UpdateActiveConnections(address, 1)
 	// select the appropriate invoke function
 	log.WithFields(map[string]any{"selected": address, "addressList": addressList}).Info("Load balancer")
+
 	if address == "localhost" || address == "" {
 		resp, err = s.localInvokeFn(ctx, address, req)
 	} else {
@@ -176,14 +178,16 @@ func (s *RequestScheduler) SetAppId(appId string) {
 	}
 }
 
-func (s *RequestScheduler) reportToScalingMetricMonitoring(r *ScRequest) {
-	s.scalingMetricsMonitoring.addMetric(r.Endpoint, r.CumulativeBudget, r.Budget, r.QueuingDelay, r.RequestTimestamp)
-	// check if violation exceeds threshold or not
-	if s.scalingMetricsMonitoring.checkBudgetViolation(s.scalingConfiguration) {
-		select {
-		case s.scalingMetricReportSigChan <- struct{}{}:
-		default:
-			log.Warn("Skipping scaling metric report signal: channel full")
+func (s *RequestScheduler) scalingMetricReporting() {
+	for r := range s.ScalingReportingChan {
+		s.scalingMetricsMonitoring.addMetric(r.Endpoint, r.CumulativeBudget, r.Budget, r.QueuingDelay, r.RequestTimestamp)
+		// check if violation exceeds threshold or not
+		if s.scalingMetricsMonitoring.checkBudgetViolation(s.scalingConfiguration) {
+			select {
+			case s.scalingMetricReportSigChan <- struct{}{}:
+			default:
+				log.Warn("Skipping scaling metric report signal: channel full")
+			}
 		}
 	}
 }
@@ -236,7 +240,7 @@ func (s *RequestScheduler) scaling() {
 func (s *RequestScheduler) upstream() {
 	for r := range s.ScRequestChan {
 		//	Fetch the budget and schedule only if no workers are available
-		log.Info("[Registering request]", r.RID)
+		log.Debug("[Registering request]", r.RID)
 		r.QueueSize = s.policy.length()
 		s.allocateBudget(r)
 		s.policy.Enqueue(r, r.Priority)
@@ -250,12 +254,15 @@ func (s *RequestScheduler) downstream() {
 			r := s.policy.Dequeue().(*ScRequest)
 			r.QueuingDelay = time.Now().UnixMicro() - r.RequestTimestamp
 			r.RemainingBudget = r.CumulativeBudget - r.QueuingDelay
-			log.Info("[Dispatching request]", r.RID)
+			log.Debug("[Dispatching request]", r.RID)
 			r.ServiceSig <- struct{}{}
 			s.updateBudget(r)
 			s.updateActiveWorkers(1)
 			if s.enableScaling {
-				s.reportToScalingMetricMonitoring(r)
+				select {
+				case s.ScalingReportingChan <- r:
+					//s.reportToScalingMetricMonitoring(r)
+				}
 			}
 		}
 	}
@@ -347,7 +354,7 @@ func (s *RequestScheduler) allocateBudget(r *ScRequest) {
 func (s *RequestScheduler) updateBudget(r *ScRequest) {
 	if s.policy.Name() == "edf" {
 		if s.EnableBudgetTransfer { // r.RemainingBudget > 0 && s.EnableBudgetTransfer // allowing to transfer negative budget too
-			log.Info("Transferring budget")
+			log.Debug("Transferring budget")
 			//	TODO: update budget to budget server
 			err := s.stateStore.Set(s.ctx, &state.SetRequest{Key: r.RID,
 				Value: r.RemainingBudget,
@@ -508,6 +515,7 @@ func (s *RequestScheduler) Run() {
 	if s.enableScaling {
 		log.Info("Starting the scheduler Scaling")
 		go s.scaling()
+		go s.scalingMetricReporting()
 	}
 }
 
@@ -531,6 +539,7 @@ func newRequestScheduler(policy SchedulingPolicy, maxWorkers int64, requestChann
 		budgetTTL:                 budgetTTL,
 		SchedulerMetricMonitoring: newSchedulerMetricsMonitoring(),
 		enableScaling:             false,
+		ScalingReportingChan:      make(chan *ScRequest, requestChannelSize),
 	}
 }
 
